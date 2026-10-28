@@ -32,7 +32,7 @@ Inspired by Hermes, Muse and Grok's companion bot. Its mascot is a glowing circl
 Requirements: macOS 14+, Swift 5.10+ (Xcode or Command Line Tools), `llama.cpp` (`brew install llama.cpp`), Python 3.10+, Node 20+.
 
 ```bash
-git clone https://github.com/<you>/liquid-agent && cd liquid-agent
+git clone https://github.com/morriszdweck/liquid-agent && cd liquid-agent
 ./scripts/start-backends.sh      # models, guardian, browser bridge
 ./scripts/build-app.sh           # builds "build/Liquid Agent.app"
 open "build/Liquid Agent.app"
