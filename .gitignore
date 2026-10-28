@@ -1,0 +1,7 @@
+.build/
+build/
+.swiftpm/
+guardian/.venv/
+bridge/node_modules/
+__pycache__/
+.DS_Store

@@ -1,0 +1,13 @@
+{
+  "name": "liquid-agent-bridge",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Betterwright bridge for Liquid Agent",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "betterwright": "^2.7.3"
+  }
+}
