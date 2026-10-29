@@ -25,6 +25,9 @@ struct Message: Identifiable, Codable, Hashable {
     var approval: ApprovalStatus?
     var guardianScore: Double?
     var imagePath: String?
+    var fileName: String?
+    /// Which brain answered, shown under the reply.
+    var model: String?
     var date = Date()
 }
 
@@ -77,9 +80,39 @@ enum ModelChoice: String, Codable, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .lfm3_1_7b: "LFM3 1.7B"
-        case .lfm3_2b_omni: "LFM3 2B Omni"
+        case .lfm3_2b_omni: "LFM3 Omni 2B"
         }
     }
 
     var supportsImages: Bool { self == .lfm3_2b_omni }
+}
+
+/// A saved request the user can run with one click, optionally every day.
+struct Routine: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var name: String
+    var prompt: String
+    var symbol: String = "sparkles"
+    var daily = false
+    var hour = 9
+    var minute = 0
+    var lastRun: Date?
+}
+
+/// One action the agent took, for the Activity screen.
+struct ActivityEntry: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var date = Date()
+    var tool: String
+    var args: String
+    var decision: String
+    var result: String
+}
+
+/// A file attached to a message: images go to Omni, text is inlined.
+struct Attachment: Hashable {
+    var path: String
+
+    var name: String { (path as NSString).lastPathComponent }
+    var isImage: Bool { ["png", "jpg", "jpeg", "heic", "gif", "webp"].contains((path as NSString).pathExtension.lowercased()) }
 }

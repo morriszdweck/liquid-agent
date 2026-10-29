@@ -48,6 +48,8 @@ struct LLMClient {
                         "stream": true,
                         "temperature": temperature,
                         "max_tokens": maxTokens,
+                        // LFM3 reasons by default; skipping it keeps replies fast and cheap.
+                        "chat_template_kwargs": ["enable_thinking": false],
                     ]
                     if !stop.isEmpty { body["stop"] = stop }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)

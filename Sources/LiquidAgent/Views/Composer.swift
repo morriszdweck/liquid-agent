@@ -4,57 +4,61 @@ import UniformTypeIdentifiers
 
 struct Composer: View {
     @EnvironmentObject var state: AppState
-    @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var voice: VoiceController
     @State private var text = ""
-    @State private var imagePath: String?
+    @State private var attachments: [Attachment] = []
+    @State private var dropTarget = false
     @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let imagePath, let image = NSImage(contentsOfFile: imagePath) {
-                HStack {
-                    Image(nsImage: image).resizable().scaledToFill()
-                        .frame(width: 48, height: 48).clipShape(RoundedRectangle(cornerRadius: 8))
-                    Button { self.imagePath = nil } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.borderless)
+            if !attachments.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(attachments, id: \.self) { a in
+                            AttachmentChip(attachment: a) { attachments.removeAll { $0 == a } }
+                        }
+                    }
                 }
             }
-            TextField("Message Liquid Agent", text: $text, axis: .vertical)
+            TextField(voice.listening ? "Listening…" : "Ask anything, or tell me what to do", text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.body)
                 .lineLimit(1...8)
                 .focused($focused)
                 .onSubmit(submit)
-            HStack(spacing: 14) {
-                Button(action: pickImage) { Image(systemName: "plus") }
-                    .disabled(!settings.model.supportsImages)
-                    .help(settings.model.supportsImages ? "Attach image" : "Images need LFM3 2B Omni")
+            HStack(spacing: 16) {
+                Button(action: pickFiles) { Image(systemName: "paperclip") }
+                    .help("Attach a picture or file")
+                Button { state.lookAtScreen() } label: { Image(systemName: "rectangle.dashed.and.paperclip") }
+                    .help("Look at my screen")
                 Button {
                     voice.listening ? voice.stopListening() : voice.listen { text = $0; submit() }
                 } label: {
                     Image(systemName: voice.listening ? "mic.fill" : "mic")
                         .foregroundStyle(voice.listening ? .red : .primary)
                 }
-                .help("Dictate")
+                .help("Speak instead of typing")
                 Spacer()
-                Button(action: state.toggleVoiceChat) {
-                    Image(systemName: "waveform")
-                        .foregroundStyle(state.voiceChat ? Color.accentColor : .primary)
+                Button { state.startVoiceChat() } label: {
+                    Label("Voice", systemImage: "waveform")
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(.quaternary.opacity(0.6)))
                 }
-                .help("Voice chat")
+                .help("Start a hands-free voice chat")
                 if state.running {
                     Button(action: state.stop) {
-                        Image(systemName: "stop.fill").padding(7).background(Circle().fill(.primary))
+                        Image(systemName: "stop.fill").padding(8).background(Circle().fill(.primary))
                             .foregroundStyle(Color(nsColor: .textBackgroundColor))
                     }
+                    .help("Stop")
                 } else {
                     Button(action: submit) {
-                        Image(systemName: "arrow.up").fontWeight(.bold).padding(7)
-                            .background(Circle().fill(text.trimmed.isEmpty ? Color.secondary.opacity(0.4) : .primary))
+                        Image(systemName: "arrow.up").fontWeight(.bold).padding(8)
+                            .background(Circle().fill(canSend ? Color.primary : Color.secondary.opacity(0.4)))
                             .foregroundStyle(Color(nsColor: .textBackgroundColor))
                     }
-                    .disabled(text.trimmed.isEmpty)
+                    .disabled(!canSend)
+                    .help("Send")
                 }
             }
             .buttonStyle(.borderless)
@@ -62,22 +66,52 @@ struct Composer: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 22).fill(Color(nsColor: .controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.quaternary))
+        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(dropTarget ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: dropTarget ? 2 : 1))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+        .onDrop(of: [.fileURL], isTargeted: $dropTarget) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let url { Task { @MainActor in attachments.append(Attachment(path: url.path)) } }
+                }
+            }
+            return true
+        }
         .onAppear { focused = true }
     }
 
+    private var canSend: Bool { !text.trimmed.isEmpty || !attachments.isEmpty }
+
     private func submit() {
-        guard !text.trimmed.isEmpty, !state.running else { return }
-        state.send(text, imagePath: imagePath)
+        guard canSend, !state.running else { return }
+        state.send(text, attachments: attachments)
         text = ""
-        imagePath = nil
+        attachments = []
     }
 
-    private func pickImage() {
+    private func pickFiles() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg]
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK { imagePath = panel.url?.path }
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK { attachments += panel.urls.map { Attachment(path: $0.path) } }
+    }
+}
+
+struct AttachmentChip: View {
+    var attachment: Attachment
+    var remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if attachment.isImage, let image = NSImage(contentsOfFile: attachment.path) {
+                Image(nsImage: image).resizable().scaledToFill().frame(width: 36, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "doc.text").frame(width: 36, height: 36)
+            }
+            Text(attachment.name).font(.caption).lineLimit(1).frame(maxWidth: 140)
+            Button(action: remove) { Image(systemName: "xmark.circle.fill") }.buttonStyle(.borderless)
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.5)))
     }
 }

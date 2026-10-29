@@ -1,51 +1,38 @@
-"""Auto 200M guardian sidecar for Liquid Agent.
+"""Auto 200M (INT4) guardian sidecar for Liquid Agent.
 
 Serves P(deny) for a proposed tool call on 127.0.0.1 only.
 
     POST /classify {"text": "<auto-200m input>"} -> {"p_deny": 0.12}
     GET  /health -> {"ok": true, "model": "..."}
 
-Weights are quantized to INT4 with optimum-quanto unless --no-int4 is passed.
+Uses ProCreations/auto-200m-2-int4 through the repo's own auto_quant.py loader
+(plain PyTorch; picks Apple MPS, then CPU).
 """
 
 import argparse
 import json
 import os
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from huggingface_hub import hf_hub_download, snapshot_download
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--repo", default=os.environ.get("LA_GUARDIAN_REPO", "ProCreations/auto-200m-2"))
+parser.add_argument("--repo", default=os.environ.get("LA_GUARDIAN_REPO", "ProCreations/auto-200m-2-int4"))
 parser.add_argument("--port", type=int, default=8766)
-parser.add_argument("--no-int4", action="store_true")
-parser.add_argument("--max-tokens", type=int, default=4096)
+parser.add_argument("--download-only", action="store_true")
 args = parser.parse_args()
 
-device = "mps" if torch.backends.mps.is_available() else "cpu"
-tokenizer = AutoTokenizer.from_pretrained(args.repo)
-model = AutoModelForSequenceClassification.from_pretrained(args.repo, dtype=torch.float32).eval()
+if args.download_only:
+    snapshot_download(args.repo, allow_patterns=["*.py", "*.json", "*.safetensors"])
+    print("downloaded", args.repo)
+    sys.exit(0)
 
-quant = "fp32"
-if not args.no_int4:
-    try:
-        from optimum.quanto import freeze, qint4, quantize
+sys.path.insert(0, os.path.dirname(hf_hub_download(args.repo, "auto_quant.py")))
+import auto_quant  # noqa: E402
 
-        quantize(model, weights=qint4)
-        freeze(model)
-        quant = "int4"
-    except Exception as e:  # quanto missing or unsupported layer: fall back, still works
-        print(f"[guardian] INT4 unavailable ({e}); running fp32")
-model.to(device)
-print(f"[guardian] {args.repo} on {device} ({quant}) at 127.0.0.1:{args.port}")
-
-
-def p_deny(text: str) -> float:
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=args.max_tokens).to(device)
-    with torch.inference_mode():
-        logits = model(**inputs).logits.float()
-    return logits.softmax(-1)[0, 1].item()
+model, tokenizer = auto_quant.load(args.repo)
+print(f"[guardian] {args.repo} ready at 127.0.0.1:{args.port}", flush=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -59,7 +46,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._send(200, {"ok": True, "model": args.repo, "quant": quant})
+            self._send(200, {"ok": True, "model": args.repo})
         else:
             self._send(404, {"error": "not found"})
 
@@ -69,7 +56,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             text = json.loads(self.rfile.read(length))["text"]
-            self._send(200, {"p_deny": p_deny(text)})
+            self._send(200, {"p_deny": float(auto_quant.score(model, tokenizer, text))})
         except Exception as e:
             self._send(400, {"error": str(e)})
 

@@ -16,7 +16,10 @@ struct Guardian {
     struct HistoryItem { var tool: String; var args: String; var result: String }
 
     static func buildInput(request: String, history: [HistoryItem], call: ToolCall) -> String {
-        var parts = ["### PROPOSED TOOL CALL", "tool: \(call.name)", "args: \(call.argsSummary)", "",
+        // Compact JSON args match the training data (model card).
+        let args = (try? JSONSerialization.data(withJSONObject: call.args, options: [.sortedKeys, .withoutEscapingSlashes]))
+            .map { String(decoding: $0, as: UTF8.self) } ?? call.argsSummary
+        var parts = ["### PROPOSED TOOL CALL", "tool: \(call.name)", "args: \(args)", "",
                      "### USER REQUEST", request, "", "### AGENT HISTORY"]
         if history.isEmpty {
             parts.append("(no prior actions)")

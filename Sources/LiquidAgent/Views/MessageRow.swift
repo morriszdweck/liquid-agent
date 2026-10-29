@@ -2,7 +2,10 @@ import AppKit
 import SwiftUI
 
 struct MessageRow: View {
+    @EnvironmentObject var state: AppState
     var message: Message
+    var isLast = false
+    @State private var hovering = false
 
     var body: some View {
         switch message.role {
@@ -15,7 +18,10 @@ struct MessageRow: View {
                             .frame(maxWidth: 220, maxHeight: 220)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    Text(message.text)
+                    if let file = message.fileName {
+                        Label(file, systemImage: "doc").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(message.text.components(separatedBy: "\n\n[File ").first ?? message.text)
                         .textSelection(.enabled)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
@@ -24,7 +30,24 @@ struct MessageRow: View {
             }
         case .assistant:
             if !message.text.isEmpty {
-                RichText(text: message.text)
+                VStack(alignment: .leading, spacing: 6) {
+                    RichText(text: message.text)
+                    HStack(spacing: 12) {
+                        Button { copy(message.text) } label: { Image(systemName: "doc.on.doc") }.help("Copy")
+                        Button { state.readAloud(message.text) } label: { Image(systemName: "speaker.wave.2") }.help("Read aloud")
+                        if isLast, !state.running {
+                            Button { state.regenerate() } label: { Image(systemName: "arrow.clockwise") }.help("Try again")
+                        }
+                        if let model = message.model {
+                            Text(model).font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .opacity(hovering || isLast ? 1 : 0)
+                }
+                .onHover { hovering = $0 }
             }
         case .tool:
             ToolCard(message: message)
@@ -32,6 +55,11 @@ struct MessageRow: View {
             EmptyView()
         }
     }
+}
+
+private func copy(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
 }
 
 /// Minimal markdown: fenced code blocks plus inline markdown per paragraph.

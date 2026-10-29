@@ -1,86 +1,86 @@
 # Liquid Agent
 
-A local-only agent for macOS, built for **LFM3 1.7B** and **LFM3 2B Omni**.
-Chat like ChatGPT, let the agent act on your Mac, and keep everything on your machine.
+A private AI agent for your Mac, built for **LFM3 1.7B** and **LFM3 Omni 2B**. It's as easy to use as ChatGPT, it can do things on your Mac for you, and it runs entirely on your computer.
 
-Inspired by Hermes, Muse and Grok's companion bot. Its mascot is a glowing circle with two eyes that blink, look around, and react while the agent thinks, works, listens or needs you.
+Inspired by Hermes, Muse and Grok.
+
+## So easy anyone can use it
+
+1. Open Liquid Agent.
+2. Click **Set up everything**.
+3. Start chatting.
+
+There's no Terminal and no picking models. The app downloads what it needs, starts it, and picks the right brain for each request.
 
 ## Features
 
-- **ChatGPT-style UI.** Sidebar of chats, centered conversation, rounded composer, streaming replies, code blocks with copy.
-- **Agent harness tuned for small models.** LFM-native tool calls (`<|tool_call_start|>[tool(arg="v")]<|tool_call_end|>`) with pythonic and JSON fallbacks, one call per step, a step limit, and short tool signatures.
-- **Token efficient.**
-  - The system prompt stays around 250 tokens.
-  - History is packed newest-first into a context budget you set.
-  - Older tool results are cut to 240 characters, and only the latest one gets the full limit.
-  - Only memory facts relevant to the request are included.
-  - Only the newest image is sent.
-  - Browser pages come back as compact text plus numbered elements instead of raw DOM.
+- **Chat.** ChatGPT-style chat with streaming replies, search, rename and export (Markdown). Each reply has copy, read-aloud and try-again buttons.
+- **Voice chat.** A full-screen, hands-free conversation: you talk, it answers out loud, then listens again. Speech recognition runs on-device.
+- **Look at my screen.** One click takes a screenshot and Omni explains or helps with what's on it.
+- **Attachments.** Drag in pictures or files. Pictures go to Omni; text files are read into the chat.
+- **For You.** Personalized idea cards based on what the agent remembers about you.
+- **Memory.** The agent remembers useful facts about you. You can see, add and delete them.
+- **Routines.** One-click tasks such as a morning briefing, tidying Downloads, today's news or a Mac health check. Any routine can run every day at a set time.
+- **Activity.** A log of every action the agent took and who approved it.
+- **Menu bar quick ask.** Ask a question from the menu bar without opening the window.
+- **Notifications.** You get a notification when a task finishes or the agent needs your OK. Reminders can be set by voice or text.
+- **Personality.** Choose Friendly, Concise, Playful or Professional. The agent can also greet you by name.
+- **Tools.** Shell, files, open apps and websites, web search, a Betterwright browser (go to a page, read, click, type), memory, clipboard and reminders.
+- **Automatic model choice.** LFM3 Omni 2B handles pictures and the screen. LFM3 1.7B handles everything else, because it's faster.
 - **Three approval modes.**
   - **Ask for Approval:** asks before every action.
-  - **Approve for Me:** [Auto 200M](https://huggingface.co/ProCreations/auto-200m-2) (INT4) judges each tool call. Safe calls run; anything risky, and anything when the guardian is offline, comes to you.
-  - **Full Auto:** runs everything. Hard-blocked shell patterns (`sudo`, `rm -rf ~`, piping into `sh`, and similar) still ask you.
-- **Betterwright browser.** A persistent [Betterwright](https://pi.dev/packages/betterwright) session via a local bridge, with `browser_goto`, `browser_read`, `browser_click` and `browser_type`. Logins survive between turns.
-- **Voice chat.** Hands-free loop: on-device speech recognition, then the agent, then a spoken reply, then listening again. Dictation is also available in the composer.
-- **Memory and Ideas.** The agent saves facts about you with `remember`. On launch it generates personalized idea cards from what it knows. You can edit memory in Settings → Memory.
-- **Vision.** Attach images when using LFM3 2B Omni.
-- **Tools:** shell, read/write/list files, open apps/URLs, browser, remember/recall, clipboard.
-- **Local only.** Every endpoint must be `localhost` or `127.0.0.1`. The app refuses anything else, and all sidecars bind to loopback.
+  - **Approve for Me:** [Auto 200M INT4](https://huggingface.co/ProCreations/auto-200m-2-int4) runs anything it judges safe and asks you about the rest.
+  - **Full Auto:** runs everything, but risky shell commands still ask you.
+- **Token efficient.**
+  - The system prompt is about 250 tokens.
+  - History is fitted to a token budget, newest first, and older tool results are trimmed.
+  - Only memory facts relevant to the request are included, and only the newest image is sent.
+  - Unavailable tools are left out of the prompt.
+  - Browser pages come back as compact text plus a list of buttons and links.
+- **Local only.** All servers listen on 127.0.0.1, and the app refuses any endpoint that isn't on your Mac.
 
-## Quick start
+## What gets downloaded (once)
 
-Requirements: macOS 14+, Swift 5.10+ (Xcode or Command Line Tools), `llama.cpp` (`brew install llama.cpp`), Python 3.10+, Node 20+.
+| Part | What it is | Size | Source |
+|---|---|---|---|
+| AI engine | latest llama.cpp (needed for the `lfm3` architecture) | ~30 MB | GitHub |
+| Everyday brain | `LiquidAI/LFM3-1.7B-GGUF` Q4_K_M | 1.1 GB | Hugging Face |
+| Eyes and ears | `LiquidAI/LFM3-Omni-2B-GGUF` Q4_K_M + mmproj Q8_0 | 1.6 GB | Hugging Face |
+| Safety helper | `ProCreations/auto-200m-2-int4` + a private Python (via uv) | ~900 MB | Hugging Face, GitHub |
+| Web helper | Betterwright + its browser + a private Node.js | ~250 MB | npm, nodejs.org |
+
+Everything is stored in `~/Library/Application Support/LiquidAgent/`. You can remove any part in Settings → Downloads.
+
+## Build from source
+
+You need macOS 14 or later and Swift 5.10 or later (Xcode or the Command Line Tools).
 
 ```bash
 git clone https://github.com/morriszdweck/liquid-agent && cd liquid-agent
-./scripts/start-backends.sh      # models, guardian, browser bridge
-./scripts/build-app.sh           # builds "build/Liquid Agent.app"
+./scripts/build-app.sh
 open "build/Liquid Agent.app"
 ```
 
-For development, use `swift run`. Voice needs the bundled `.app`, because macOS requires microphone and speech usage strings.
-
-### Model servers
-
-`start-backends.sh` runs `llama-server -hf` with these defaults. Override them if the repo names differ:
-
-```bash
-LA_SMALL_GGUF=LiquidAI/LFM3-1.7B-GGUF:Q4_K_M \
-LA_OMNI_GGUF=LiquidAI/LFM3-2B-Omni-GGUF:Q4_K_M \
-./scripts/start-backends.sh
-```
-
-Any OpenAI-compatible local server works, including Ollama and `mlx_lm.server`. Set the URL and model id in Settings → Models.
-
-| Service | Port |
-|---|---|
-| LFM3 1.7B | 8080 |
-| LFM3 2B Omni | 8081 |
-| Auto 200M guardian | 8766 |
-| Betterwright bridge | 8767 |
+From the terminal, `LiquidAgent --install engine,small,omni,guardian,browser` installs parts without the UI. `scripts/start-backends.sh` is a developer path that runs servers from the repo.
 
 ## Architecture
 
 ```
 Sources/LiquidAgent/
-  AppState.swift     agent loop, approval flow, voice loop, persistence
-  Agent.swift        prompt builder + token-budget packing
-  ToolParser.swift   LFM / pythonic / JSON tool-call parser
-  Tools.swift        tool registry
-  Guardian.swift     Auto 200M client (model-card input format) + hard rules
-  Browser.swift      Betterwright bridge client
-  Memory.swift       user facts + idea generation
-  Voice.swift        on-device STT/TTS
-  Views/             ChatGPT-style UI, mascot, settings
-guardian/server.py   Auto 200M sidecar (transformers + optimum-quanto INT4)
-bridge/server.mjs    Betterwright sidecar
+  AppState.swift      agent loop, auto model routing, approvals, voice, routines, activity
+  Backends.swift      downloads, installs and runs every local part
+  Downloader.swift    file downloads with progress
+  Agent.swift         prompt builder + token-budget packing
+  ToolParser.swift    LFM / pythonic / JSON tool-call parser
+  Tools.swift         tool registry
+  Guardian.swift      Auto 200M client + hard safety rules
+  Browser.swift       Betterwright bridge client
+  Memory.swift        user facts + idea generation
+  Voice.swift         on-device speech in and out
+  Views/              chat, voice, For You, routines, memory, activity, setup, settings
+guardian/server.py    Auto 200M INT4 sidecar (uses the repo's auto_quant.py)
+bridge/server.mjs     Betterwright sidecar
 ```
-
-Data lives in `~/Library/Application Support/LiquidAgent/`.
-
-## Status
-
-This is an early release. The LFM3 GGUF repo names and Betterwright's `run()` result envelope are assumptions. Check them against current releases and open an issue if they differ.
 
 ## License
 

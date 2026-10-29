@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Starts every local backend Liquid Agent uses. All bind to 127.0.0.1.
-#   :8080  LFM3 1.7B      (llama-server)
-#   :8081  LFM3 2B Omni   (llama-server, with vision projector if present)
+#   :8180  LFM3 1.7B      (llama-server)
+#   :8181  LFM3 Omni 2B   (llama-server + vision projector)
 #   :8766  Auto 200M guardian
 #   :8767  Betterwright bridge
-# Override model repos with env vars, e.g. LA_SMALL_GGUF=LiquidAI/LFM3-1.7B-GGUF:Q4_K_M
+# Override model repos with env vars, e.g. LA_SMALL_GGUF=LiquidAI/LFM3-1.7B-GGUF:Q4_K_M (dev only; the app downloads models itself)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SMALL="${LA_SMALL_GGUF:-LiquidAI/LFM3-1.7B-GGUF:Q4_K_M}"
-OMNI="${LA_OMNI_GGUF:-LiquidAI/LFM3-2B-Omni-GGUF:Q4_K_M}"
+OMNI="${LA_OMNI_GGUF:-LiquidAI/LFM3-Omni-2B-GGUF:Q4_K_M}"
 CTX="${LA_CTX:-8192}"
 LOGS="${TMPDIR:-/tmp}/liquid-agent"
 mkdir -p "$LOGS"
@@ -25,11 +25,14 @@ start() { # name, log, command...
   pids+=($!)
 }
 
-if command -v llama-server >/dev/null; then
-  start "LFM3 1.7B" small.log llama-server -hf "$SMALL" --host 127.0.0.1 --port 8080 -c "$CTX" --jinja --alias LFM3-1.7B
-  start "LFM3 2B Omni" omni.log llama-server -hf "$OMNI" --host 127.0.0.1 --port 8081 -c "$CTX" --jinja --alias LFM3-2B-Omni
+# Prefer the app's own llama.cpp: older Homebrew builds can't load the lfm3 architecture.
+LLAMA="$(find "$HOME/Library/Application Support/LiquidAgent/engine" -name llama-server -type f 2>/dev/null | head -1)"
+LLAMA="${LLAMA:-$(command -v llama-server || true)}"
+if [ -n "$LLAMA" ]; then
+  start "LFM3 1.7B" small.log "$LLAMA" -hf "$SMALL" --host 127.0.0.1 --port 8180 -c "$CTX" --jinja --alias LFM3-1.7B
+  start "LFM3 Omni 2B" omni.log "$LLAMA" -hf "$OMNI" --host 127.0.0.1 --port 8181 -c "$CTX" --jinja --alias LFM3-Omni-2B
 else
-  echo "llama-server not found: brew install llama.cpp (or point Settings at Ollama / mlx_lm.server)"
+  echo "llama-server not found: open the app and download the AI engine (Setup)"
 fi
 
 if [ ! -d guardian/.venv ]; then

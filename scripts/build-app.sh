@@ -10,6 +10,9 @@ APP="build/Liquid Agent.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/LiquidAgent"
+mkdir -p "$APP/Contents/Resources/sidecars/guardian" "$APP/Contents/Resources/sidecars/bridge"
+cp guardian/server.py "$APP/Contents/Resources/sidecars/guardian/"
+cp bridge/server.mjs bridge/package.json "$APP/Contents/Resources/sidecars/bridge/"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UserNotifications
 
 struct ToolContext {
     var workspace: String
@@ -34,6 +35,14 @@ extension Dictionary where Key == String, Value == String {
     }
 }
 
+extension Tool {
+    /// Parameter names from the signature, e.g. `["path", "content"]`.
+    var params: [String] {
+        guard let open = signature.firstIndex(of: "("), let close = signature.firstIndex(of: ")") else { return [] }
+        return signature[signature.index(after: open)..<close].split(separator: ",").map { $0.trimmed }.filter { !$0.isEmpty }
+    }
+}
+
 enum Toolbox {
     static let all: [Tool] = [
         Tool(name: "shell", signature: "shell(cmd) run a zsh command in the workspace") { args, ctx in
@@ -58,6 +67,10 @@ enum Toolbox {
             let target = try args.req("target")
             let isApp = !target.contains("/") && !target.contains(".")
             return try await Shell.run(isApp ? "open -a \(quote(target))" : "open \(quote(target))", cwd: nil)
+        },
+        Tool(name: "web_search", signature: "web_search(query) search the web") { args, ctx in
+            let q = try args.req("query").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            return try await ctx.browser.goto("https://html.duckduckgo.com/html/?q=" + q)
         },
         Tool(name: "browser_goto", signature: "browser_goto(url) open page in Betterwright browser") { args, ctx in
             try await ctx.browser.goto(try args.req("url"))
@@ -84,9 +97,35 @@ enum Toolbox {
         Tool(name: "clipboard", signature: "clipboard() read clipboard text") { _, _ in
             await MainActor.run { NSPasteboard.general.string(forType: .string) ?? "(empty)" }
         },
+        Tool(name: "set_clipboard", signature: "set_clipboard(text) copy text for the user") { args, _ in
+            let text = args["text"] ?? ""
+            await MainActor.run {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+            return "copied"
+        },
+        Tool(name: "reminder", signature: "reminder(text, minutes) notify the user later") { args, _ in
+            let text = try args.req("text")
+            let minutes = max(1, Double(args["minutes"] ?? "") ?? 10)
+            let content = UNMutableNotificationContent()
+            content.title = "Liquid Agent reminder"
+            content.body = text
+            content.sound = .default
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: minutes * 60, repeats: false)
+            let center = UNUserNotificationCenter.current()
+            _ = try await center.requestAuthorization(options: [.alert, .sound])
+            try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger))
+            return "reminder set for \(Int(minutes)) min"
+        },
     ]
 
     static func named(_ name: String) -> Tool? { all.first { $0.name == name } }
+
+    /// Tools worth describing to the model right now. Hiding unusable ones saves tokens.
+    static func available(browser: Bool) -> [Tool] {
+        browser ? all : all.filter { !$0.name.hasPrefix("browser") && $0.name != "web_search" }
+    }
 
     static func resolve(_ path: String, _ ctx: ToolContext) -> URL {
         let expanded = (path as NSString).expandingTildeInPath
