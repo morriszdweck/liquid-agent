@@ -188,15 +188,24 @@ bold "Liquid Agent is installed."
 echo "Open it any time from $WHERE (\"Liquid Agent\"), or run: liquid-agent"
 if [ "$OS" = "Linux" ]; then
   # Everything works without these; they add the clipboard, audio files and reminder pop-ups.
+  if command -v apt-get >/dev/null; then pm="sudo apt install" ffmpeg="ffmpeg" notify="libnotify-bin"
+  elif command -v dnf >/dev/null; then pm="sudo dnf install" ffmpeg="ffmpeg-free" notify="libnotify"
+  elif command -v pacman >/dev/null; then pm="sudo pacman -S" ffmpeg="ffmpeg" notify="libnotify"
+  elif command -v zypper >/dev/null; then pm="sudo zypper install" ffmpeg="ffmpeg" notify="libnotify-tools"
+  else pm="" ffmpeg="ffmpeg" notify="notify-send"
+  fi
   want=""
   if [ -n "${WAYLAND_DISPLAY:-}" ]; then
     command -v wl-copy >/dev/null || want="$want wl-clipboard"
   else
     command -v xclip >/dev/null || command -v xsel >/dev/null || want="$want xclip"
   fi
-  command -v ffmpeg >/dev/null || want="$want ffmpeg"
-  command -v notify-send >/dev/null || want="$want libnotify-bin"
-  [ -z "$want" ] || echo "Optional extras for the clipboard, audio files and reminders (on Ubuntu): sudo apt install$want"
+  command -v ffmpeg >/dev/null || want="$want $ffmpeg"
+  command -v notify-send >/dev/null || want="$want $notify"
+  if [ -n "$want" ]; then
+    if [ -n "$pm" ]; then echo "Optional extras for the clipboard, audio files and reminders: $pm$want"
+    else echo "Optional extras for the clipboard, audio files and reminders:$want"; fi
+  fi
 fi
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;

@@ -87,6 +87,20 @@ jobs:
         run: node scripts/smoke.mjs --models
         timeout-minutes: 40
 
+  omni:
+    name: LFM3 Omni 2B speaks, listens and sees on Linux (CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Download the engine and the smallest Omni, then speak, transcribe and describe a picture
+        run: node scripts/smoke.mjs --omni
+        timeout-minutes: 50
+
   helpers:
     name: Safety and Web helpers on Linux
     runs-on: ubuntu-latest

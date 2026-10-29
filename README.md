@@ -42,7 +42,7 @@ The same command installs it on Linux. It needs a 64-bit Intel, AMD or ARM compu
 
 `LIQUID_AGENT_GPU=vulkan` or `LIQUID_AGENT_GPU=cpu` picks one of the others; then remove and reinstall the AI engine in Settings → Downloads. If the GPU build can't start a model, Liquid Agent restarts it on the CPU by itself.
 
-**Optional extras.** Everything works without these. They add the clipboard, screenshots, audio files and reminder pop-ups:
+**Optional extras.** Everything works without these. They add the clipboard, screenshots, audio files and reminder pop-ups. On Ubuntu and Debian (other distributions have the same packages, with `libnotify` in place of `libnotify-bin`):
 
 ```bash
 sudo apt install wl-clipboard xclip ffmpeg libnotify-bin imagemagick pandoc
