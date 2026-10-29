@@ -6,6 +6,7 @@ import { api } from "../api";
 import { errorToast, go, pendingApprovals, useStore } from "../store";
 import { Spinner } from "./ui";
 import { ToolIcon } from "./Steps";
+import { IS_MAC } from "../util";
 
 export function ApprovalDock({ chatId, showChat }: { chatId?: string; showChat?: boolean }) {
   const chats = useStore((s) => s.chats);
@@ -77,7 +78,7 @@ export function ApprovalDock({ chatId, showChat }: { chatId?: string; showChat?:
         <button className="btn primary" disabled={!!sending} onClick={() => answer(step.id, true)}>
           {sending === step.id ? <Spinner size={13} /> : null}
           Allow
-          <kbd>⌘↵</kbd>
+          <kbd>{IS_MAC ? "⌘↵" : "Ctrl+Enter"}</kbd>
         </button>
       </div>
     </div>

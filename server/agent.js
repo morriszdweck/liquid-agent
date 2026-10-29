@@ -2,7 +2,7 @@
 // repeat until the model answers.
 
 import crypto from "node:crypto";
-import { MODELS, bus, load, saver, settings } from "./core.js";
+import { DEVICE, MODELS, bus, load, saver, settings } from "./core.js";
 import { backends } from "./backends.js";
 import { classify, hardDeny } from "./guardian.js";
 import { complete, stream } from "./llm.js";
@@ -20,7 +20,7 @@ const OPEN = ["pending", "checking", "approval", "running"];
 // every tool signature costs prompt tokens. Offer tools only when the request
 // mentions something a tool is for, or the last reply was already using them.
 const TOOL_WORDS =
-  /\b(files?|folders?|desktop|downloads|documents|disk|directory|open|launch|run|command|terminal|shell|install|apps?|mac|computer|search|google|look ?up|web|websites?|site|online|internet|url|links?|browse|browser|click|type into|news|weather|forecast|price|stocks?|score|latest|current|today|tonight|tomorrow|yesterday|now|recent|remind|reminder|remember|forget|recall|clipboard|copy|paste|screen|screenshot|save|read|list|delete|move|rename|battery|wi-?fi|my)\b|[~/]\w|\.[a-z]{2,4}\b/i;
+  /\b(files?|folders?|desktop|downloads|documents|disk|directory|open|launch|run|command|terminal|shell|install|apps?|mac|linux|computer|search|google|look ?up|web|websites?|site|online|internet|url|links?|browse|browser|click|type into|news|weather|forecast|price|stocks?|score|latest|current|today|tonight|tomorrow|yesterday|now|recent|remind|reminder|remember|forget|recall|clipboard|copy|paste|screen|screenshot|save|read|list|delete|move|rename|battery|wi-?fi|my)\b|[~/]\w|\.[a-z]{2,4}\b/i;
 
 /** Some templates leave the thinking in the text instead of reporting it separately. */
 function splitThink(text) {
@@ -324,7 +324,7 @@ export const agent = {
     const mode = settings.approvalMode;
     const ask = (reason) => this.askUser(chat, step, reason, signal);
     if (tool?.free) return { approved: true, decision: "Automatic" };
-    if (hardDeny(step.tool, step.args)) return ask("This command can change important parts of your Mac.");
+    if (hardDeny(step.tool, step.args)) return ask(`This command can change important parts of your ${DEVICE}.`);
     if (mode === "askAlways") return ask();
     if (mode === "fullAuto") return { approved: true, decision: "Full Auto" };
     if (tool.kind !== "write") return { approved: true, decision: tool.kind === "read" ? "Read-only, safe" : "Safe" };

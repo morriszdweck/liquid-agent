@@ -5,12 +5,13 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { DATA, DIRS, QUANTS, ROOT, bus, bytesText, load, run, save, settings, sleep } from "./core.js";
+import { DATA, DEVICE, DIRS, IS_MAC, QUANTS, ROOT, bus, bytesText, load, run, save, settings, sleep } from "./core.js";
+import { linuxGPU, listeners } from "./platform.js";
 
 export const PARTS = {
   engine: {
     title: "AI engine",
-    detail: "Runs the models on your Mac (latest llama.cpp).",
+    detail: `Runs the models on your ${DEVICE} (latest llama.cpp).`,
     size: "about 30 MB",
     bytes: 0.03e9,
   },
@@ -53,7 +54,43 @@ const quantOf = (id) => QUANTS[id].find((q) => q.id === settings[`${id}Quant`]) 
 const weightsFile = (id) => `${GGUF[id].prefix}${quantOf(id).id}.gguf`;
 
 const ARCH = process.arch === "arm64" ? "arm64" : "x64";
-const ENGINE_ASSET = process.platform === "darwin" ? `bin-macos-${ARCH}.tar.gz` : `bin-ubuntu-${ARCH}.tar.gz`;
+
+/**
+ * Which llama.cpp build runs the models. A Mac always uses Metal. On Linux it's
+ * Vulkan when a real GPU driver is installed (NVIDIA, AMD or Intel), else the
+ * CPU build. CUDA is faster on NVIDIA but a much bigger download, so it's only
+ * used when LIQUID_AGENT_GPU=cuda. LIQUID_AGENT_GPU=cpu or vulkan also works.
+ */
+const FLAVOR = (() => {
+  if (IS_MAC) return "metal";
+  const gpu = linuxGPU();
+  const wanted = process.env.LIQUID_AGENT_GPU;
+  if (wanted === "cuda" && gpu.nvidiaDriver >= 525) return "cuda";
+  if (wanted === "cpu" || wanted === "vulkan") return wanted;
+  return gpu.vulkan ? "vulkan" : "cpu";
+})();
+const ENGINE_TEXT = {
+  metal: "Runs the models on your Mac (latest llama.cpp).",
+  vulkan: "Runs the models on your graphics card with Vulkan (latest llama.cpp).",
+  cuda: "Runs the models on your NVIDIA graphics card with CUDA (latest llama.cpp).",
+  cpu: "Runs the models on your computer's processor (latest llama.cpp).",
+};
+
+/** The release file for this computer. CUDA builds come per CUDA version; take the newest the driver can run. */
+function engineAsset(assets) {
+  const find = (suffix) => assets.find((a) => a.name.startsWith("llama-") && a.name.endsWith(suffix));
+  if (FLAVOR === "metal") return find(`bin-macos-${ARCH}.tar.gz`);
+  if (FLAVOR === "vulkan") return find(`bin-ubuntu-vulkan-${ARCH}.tar.gz`);
+  if (FLAVOR === "cuda") {
+    const driver = linuxGPU().nvidiaDriver ?? 0;
+    const builds = assets
+      .map((a) => ({ a, v: a.name.match(new RegExp(`^llama-.*bin-ubuntu-cuda-(\\d+)\\.(\\d+)-${ARCH}\\.tar\\.gz$`)) }))
+      .filter((x) => x.v && (Number(x.v[1]) >= 13 ? driver >= 580 : driver >= 525))
+      .sort((x, y) => Number(y.v[1]) - Number(x.v[1]) || Number(y.v[2]) - Number(x.v[2]));
+    if (builds.length) return builds[0].a;
+  }
+  return find(`bin-ubuntu-${ARCH}.tar.gz`);
+}
 
 const model = (name) => path.join(DIRS.models, name);
 const weights = (id) => model(weightsFile(id));
@@ -129,6 +166,8 @@ class Backends {
   guardianWanted = false;
   /** Called with a part's id each time it becomes ready. */
   readyHooks = [];
+  /** The GPU build failed to start a model, so models run on the CPU until the app restarts. */
+  cpuOnly = false;
 
   constructor() {
     this.refresh();
@@ -159,6 +198,7 @@ class Backends {
   snapshot() {
     return ORDER.map((id) => {
       const part = { id, ...PARTS[id], ...this.states[id], queued: this.queued.has(id) || (this.plan.has(id) && this.states[id]?.status === "missing") };
+      if (id === "engine") return { ...part, ...this.engineInfo };
       if (!GGUF[id]) return part;
       const extra = id === "omni" ? OMNI_PROJECTOR.bytes : 0;
       const quant = quantOf(id);
@@ -172,9 +212,9 @@ class Backends {
     });
   }
 
-  /** What the setup screen needs to suggest a size: this Mac's memory. */
+  /** What the setup screen needs to suggest a size: this computer's memory. */
   get machine() {
-    return { memoryGB: Math.round(os.totalmem() / 2 ** 30) };
+    return { memoryGB: Math.round(os.totalmem() / 2 ** 30), os: process.platform, gpu: FLAVOR };
   }
 
   emit() {
@@ -328,6 +368,21 @@ class Backends {
     }
   }
 
+  /** The engine row's text: what it runs on, and a bigger size for CUDA. */
+  get engineInfo() {
+    const flavor = this.cpuOnly ? "cpu" : (this.engineFlavor() ?? FLAVOR);
+    return { detail: ENGINE_TEXT[flavor], ...(flavor === "cuda" && { size: "about 600 MB", bytes: 0.6e9 }) };
+  }
+
+  /** The build that was downloaded, or null before there is one. */
+  engineFlavor() {
+    try {
+      return fs.readFileSync(path.join(DIRS.engine, ".flavor"), "utf8").trim() || null;
+    } catch {
+      return findEngine() ? (IS_MAC ? "metal" : "cpu") : null;
+    }
+  }
+
   async installEngine(signal) {
     const res = await fetch("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10", {
       signal,
@@ -335,16 +390,35 @@ class Backends {
     });
     if (!res.ok) throw new Error(`Couldn't reach GitHub (HTTP ${res.status}).`);
     const releases = await res.json();
-    const asset = releases.flatMap((r) => r.assets ?? []).find((a) => a.name.endsWith(ENGINE_ASSET));
+    // Take the newest release that has this computer's build, and for CUDA the matching runtime from the same release.
+    let asset;
+    let runtime;
+    for (const r of releases) {
+      asset = engineAsset(r.assets ?? []);
+      if (!asset) continue;
+      const cuda = asset.name.match(/bin-ubuntu-cuda-[\d.]+-\w+\.tar\.gz$/)?.[0];
+      runtime = cuda && r.assets.find((a) => a.name.startsWith("cudart-") && a.name.endsWith(cuda));
+      if (!cuda || runtime) break;
+    }
     if (!asset) throw new Error("No llama.cpp build for this computer was found.");
     const archive = path.join(DIRS.tools, "llama.tar.gz");
+    const extra = path.join(DIRS.tools, "cudart.tar.gz");
     await download(asset.browser_download_url, archive, { signal, onProgress: this.progress("engine", "Downloading") });
+    if (runtime) await download(runtime.browser_download_url, extra, { signal, onProgress: this.progress("engine", "Downloading CUDA") });
     this.set("engine", { status: "installing", text: "Unpacking…" });
     fs.rmSync(DIRS.engine, { recursive: true, force: true });
     fs.mkdirSync(DIRS.engine, { recursive: true });
     await run("tar", ["-xzf", archive, "-C", DIRS.engine], { signal });
     fs.rmSync(archive, { force: true });
-    if (!findEngine()) throw new Error("The download didn't contain llama-server.");
+    const server = findEngine();
+    if (!server) throw new Error("The download didn't contain llama-server.");
+    if (runtime) {
+      // The CUDA libraries go next to llama-server, where it looks for them.
+      await run("tar", ["-xzf", extra, "-C", path.dirname(server), "--strip-components", "1"], { signal });
+      fs.rmSync(extra, { force: true });
+    }
+    const flavor = asset.name.includes("-cuda-") ? "cuda" : asset.name.includes("-vulkan-") ? "vulkan" : IS_MAC ? "metal" : "cpu";
+    fs.writeFileSync(path.join(DIRS.engine, ".flavor"), flavor);
   }
 
   get pythonEnv() {
@@ -377,7 +451,9 @@ class Backends {
     this.set("guardian", { status: "installing", text: "Setting up a private Python…" });
     await run(uv, ["venv", "--allow-existing", "--python", "3.12", venv], { env, signal });
     this.set("guardian", { status: "installing", text: "Installing the safety model's tools (the slow part)…" });
-    await run(uv, ["pip", "install", "--python", path.join(venv, "bin", "python"), "-r", path.join(ROOT, "guardian", "requirements.txt")], {
+    // Auto 200M is small enough for the CPU. On Linux the default PyTorch brings gigabytes of CUDA libraries, so take the CPU build.
+    const torch = IS_MAC ? [] : ["--torch-backend", "cpu"];
+    await run(uv, ["pip", "install", ...torch, "--python", path.join(venv, "bin", "python"), "-r", path.join(ROOT, "guardian", "requirements.txt")], {
       env,
       signal,
       timeout: 1_800_000,
@@ -398,6 +474,8 @@ class Backends {
   }
 
   async installBrowser(signal) {
+    // Betterwright's own browser is built for macOS on Apple silicon and Linux on x86_64.
+    if (!IS_MAC && ARCH !== "x64") throw new Error("The Web helper's browser isn't available for Linux on ARM yet.");
     for (const file of ["server.mjs", "package.json"]) {
       fs.copyFileSync(path.join(ROOT, "bridge", file), path.join(DIRS.bridge, file));
     }
@@ -479,6 +557,7 @@ class Backends {
         // Two slots of 16K each: Omni can hold a voice call and transcribe at the same time,
         // with room for thinking. Each request turns thinking on or off itself.
         const args = ["--host", "127.0.0.1", "--port", port, "-c", "32768", "-np", "2", "--jinja", "-ngl", "99", "--reasoning", "auto"];
+        if (this.cpuOnly) args.push("--device", "none");
         if (id === "small") args.push("-m", weights("small"), "--alias", "LFM3-1.7B");
         else args.push("-m", weights("omni"), "--mmproj", model(OMNI_PROJECTOR.file), "--alias", "LFM3-Omni-2B");
         return { cmd: server, args };
@@ -503,14 +582,31 @@ class Backends {
 
   async start(id) {
     if (id === "engine" || this.procs[id] || this.launching.has(id) || !this.installed(id)) return;
+    if (await this.launch(id)) return;
+    // A GPU build that can't use the GPU (an old driver, a missing library) still runs on the CPU.
+    const gpu = ["vulkan", "cuda"].includes(this.engineFlavor());
+    if ((id === "small" || id === "omni") && gpu && !this.cpuOnly && this.states[id]?.status === "failed" && !/port \d+/.test(this.states[id].error)) {
+      this.cpuOnly = true;
+      this.set(id, { status: "starting", text: "The graphics card didn't work, so trying the processor…" });
+      for (const other of ["small", "omni"]) {
+        if (other === id || !this.procs[other]) continue;
+        this.stop(other);
+        this.start(other);
+      }
+      await this.launch(id);
+    }
+  }
+
+  /** Starts one part and waits for it to answer. True once it's running. */
+  async launch(id) {
     const spec = this.command(id);
-    if (!spec) return;
+    if (!spec) return false;
     const port = PARTS[id].port;
     this.launching.add(id);
     const free = await this.freePort(port).finally(() => this.launching.delete(id));
     if (!free) {
       this.set(id, { status: "failed", error: `Something else is using port ${port}. Quit it, then click Try again.` });
-      return;
+      return false;
     }
     const logFile = path.join(DIRS.logs, `${id}.log`);
     const log = fs.openSync(logFile, "w");
@@ -536,7 +632,7 @@ class Backends {
         const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) });
         if (res.ok) {
           this.set(id, { status: "running" });
-          return;
+          return true;
         }
       } catch {}
       await sleep(500);
@@ -546,6 +642,7 @@ class Backends {
       child.kill("SIGTERM");
     }
     this.set(id, { status: "failed", error: reasonFromLog(logFile, port) });
+    return false;
   }
 
   stop(id) {
@@ -565,20 +662,12 @@ class Backends {
 
   /** Frees a port held by a leftover copy of our own servers. Never touches anything else. */
   async freePort(port) {
-    let pids = [];
-    try {
-      pids = (await run("lsof", ["-t", `-iTCP:${port}`, "-sTCP:LISTEN"])).split("\n").filter(Boolean);
-    } catch {
-      return true; // lsof exits 1 when nothing listens
-    }
-    for (const pid of pids) {
-      let command = "";
+    const found = await listeners(port);
+    if (!found.length) return true;
+    for (const { pid, command } of found) {
+      if (!pid || !command.includes(DATA)) return false;
       try {
-        command = await run("ps", ["-o", "command=", "-p", pid]);
-      } catch {}
-      if (!command.includes(DATA)) return false;
-      try {
-        process.kill(Number(pid), "SIGTERM");
+        process.kill(pid, "SIGTERM");
       } catch {}
     }
     await sleep(600);
@@ -593,7 +682,7 @@ class Backends {
 function friendly(e) {
   const text = String(e?.message ?? e);
   if (/ENOTFOUND|EAI_AGAIN|fetch failed|ECONNRESET/i.test(text)) return "Couldn't reach the internet. Check your Wi-Fi, then click Try again.";
-  if (/ENOSPC/i.test(text)) return "Your Mac is out of disk space. Free some space, then click Try again.";
+  if (/ENOSPC/i.test(text)) return `Your ${DEVICE} is out of disk space. Free some space, then click Try again.`;
   return text.slice(0, 300);
 }
 
@@ -606,7 +695,9 @@ function reasonFromLog(file, port) {
   if (tail.includes("unknown model architecture")) return "The AI engine is too old for this model. Remove the AI engine, then download it again.";
   if (tail.includes("address already in use") || tail.includes("couldn't bind")) return `Something else is using port ${port}. Quit it, then click Try again.`;
   if (tail.includes("failed to load model") || tail.includes("error loading model")) return "The model file looks damaged. Remove it, then download it again.";
-  if (tail.includes("out of memory") || tail.includes("failed to allocate")) return "Your Mac ran out of memory. Close some apps, then click Try again.";
+  if (tail.includes("out of memory") || tail.includes("failed to allocate")) return `Your ${DEVICE} ran out of memory. Close some apps, then click Try again.`;
+  if (/glibc_[\d.]+' not found/.test(tail)) return "This Linux is too old for the AI engine. It needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later).";
+  if (tail.includes("error while loading shared libraries")) return `The AI engine is missing a system library: ${tail.match(/loading shared libraries: ([^:]+)/)?.[1] ?? "see the logs"}.`;
   return "It stopped unexpectedly. Click Try again; details are in the logs folder.";
 }
 

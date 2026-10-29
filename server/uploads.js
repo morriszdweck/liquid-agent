@@ -3,7 +3,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DIRS, load, run, save } from "./core.js";
+import { DIRS, load, save } from "./core.js";
+import { convertImage, documentText, toWav } from "./platform.js";
 
 export const MAX_UPLOAD = 25 * 1024 * 1024;
 
@@ -51,7 +52,7 @@ export const uploads = {
       kind = "image";
       if (ext === "heic" || ext === "tiff" || ext === "bmp" || mime === "image/heic") {
         const png = path.join(DIRS.uploads, `${id}.png`);
-        await run("sips", ["-s", "format", "png", "-Z", "1280", file, "--out", png]);
+        await convertImage(file, png);
         fs.rmSync(file, { force: true });
         file = png;
         mime = "image/png";
@@ -60,7 +61,7 @@ export const uploads = {
       kind = "audio";
       if (ext !== "wav") {
         const wav = path.join(DIRS.uploads, `${id}.wav`);
-        await run("afconvert", ["-f", "WAVE", "-d", "LEI16@16000", "-c", "1", file, wav]);
+        await toWav(file, wav);
         fs.rmSync(file, { force: true });
         file = wav;
         mime = "audio/wav";
@@ -70,7 +71,7 @@ export const uploads = {
       text = body.toString("utf8");
     } else if (CONVERT_EXT.has(ext)) {
       kind = "text";
-      text = await run("textutil", ["-convert", "txt", "-stdout", file]).catch(() => undefined);
+      text = await documentText(file).catch(() => undefined);
       if (text === undefined) kind = "other";
     }
     if (text !== undefined) fs.writeFileSync(file + ".txt", text);

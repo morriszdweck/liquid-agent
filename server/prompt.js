@@ -3,10 +3,13 @@
 // now, only relevant memory, and history packed newest-first into a budget.
 
 import os from "node:os";
-import { PERSONALITIES, settings } from "./core.js";
+import { DEVICE, IS_MAC, PERSONALITIES, settings } from "./core.js";
 import { memory } from "./memory.js";
 import { signature } from "./tools.js";
 import { uploads } from "./uploads.js";
+
+/** Telling the model it's on Linux keeps its shell commands right for this computer. */
+const MACHINE = IS_MAC ? "Mac" : "Linux computer";
 
 const HOME = os.homedir();
 const tilde = (f) => (f.startsWith(HOME) ? "~" + f.slice(HOME.length) : f);
@@ -27,7 +30,7 @@ export function systemPrompt({ tools, omni, query }) {
   const style = "Use Markdown when it helps: headings, lists, tables, fenced code blocks with a language, and $...$ or $$...$$ for math.";
   const toolLines = tools.length
     ? [
-        "Answer chat, math, writing, code and knowledge questions yourself; never search for something you can write or work out. Only when the request needs the Mac, files, the web or memory, reply with one call only:",
+        "Answer chat, math, writing, code and knowledge questions yourself; never search for something you can write or work out. Only when the request needs the ${DEVICE}, files, the web or memory, reply with one call only:",
         xmlCall("NAME", { ARG: "VALUE" }),
         "Tools:",
         ...tools.map(signature),
@@ -35,7 +38,7 @@ export function systemPrompt({ tools, omni, query }) {
       ]
     : ["Answer directly."];
   return [
-    `You are Liquid Agent, a private assistant running locally on the user's Mac. ${persona()}`,
+    `You are Liquid Agent, a private assistant running locally on the user's ${MACHINE}. ${persona()}`,
     style,
     ...toolLines,
     omni && "You can see and hear attachments.",
@@ -53,9 +56,9 @@ export function voiceInstructions(history = []) {
     .map((m) => `${m.role === "user" ? "User" : "You"}: ${String(m.content).replace(/\s+/g, " ").slice(0, 200)}`)
     .join("\n");
   return [
-    `You are Liquid Agent, a private voice assistant running locally on the user's Mac. ${persona()}`,
+    `You are Liquid Agent, a private voice assistant running locally on the user's ${MACHINE}. ${persona()}`,
     "You are speaking out loud. Answer in one or two short sentences with plain, natural words. Never use markdown, lists, symbols, emoji or code.",
-    "When the user asks you to do something on the Mac, with files, reminders or memory, call a tool, then say the result in a few words. For news, weather, prices or facts you aren't sure of, use web_search first.",
+    `When the user asks you to do something on the ${DEVICE}, with files, reminders or memory, call a tool, then say the result in a few words. For news, weather, prices or facts you aren't sure of, use web_search first.`,
     `Now: ${now()}.`,
     memory.promptBlock(recent),
     recent && `Earlier in this chat:\n${recent}`,

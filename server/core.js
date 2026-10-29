@@ -12,6 +12,10 @@ import { fileURLToPath } from "node:url";
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HOME = os.homedir();
 
+export const IS_MAC = process.platform === "darwin";
+/** How prompts and messages name this computer. */
+export const DEVICE = IS_MAC ? "Mac" : "computer";
+
 export const DATA =
   process.env.LIQUID_AGENT_HOME ??
   (process.platform === "darwin"
@@ -203,10 +207,25 @@ export function run(cmd, args, { cwd, env, timeout = 600_000, signal } = {}) {
   });
 }
 
-/** zsh command for the shell tool. Never throws: failures come back as text the model can read. */
+/** The shell tool's shell: zsh on macOS; on Linux the user's own bash or zsh, else bash, else sh. */
+export const SHELL = (() => {
+  if (IS_MAC) return "/bin/zsh";
+  const own = process.env.SHELL ?? "";
+  for (const candidate of [/\/(bash|zsh)$/.test(own) ? own : "", "/bin/bash", "/usr/bin/bash", "/bin/sh"]) {
+    try {
+      if (candidate) {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      }
+    } catch {}
+  }
+  return "/bin/sh";
+})();
+
+/** Shell command for the shell tool. Never throws: failures come back as text the model can read. */
 export function shell(command, { cwd, timeout = 60_000, signal } = {}) {
   return new Promise((resolve) => {
-    const child = spawn("/bin/zsh", ["-lc", command], { cwd, signal });
+    const child = spawn(SHELL, [path.basename(SHELL) === "sh" ? "-c" : "-lc", command], { cwd, signal });
     let out = "";
     const add = (d) => {
       if (out.length < MAX_OUTPUT) out += d;

@@ -4,14 +4,27 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-DATA="$HOME/Library/Application Support/LiquidAgent"
+case "$(uname -s)" in
+  Darwin)
+    DATA="$HOME/Library/Application Support/LiquidAgent"
+    node_os="darwin"
+    ;;
+  Linux)
+    DATA="${XDG_DATA_HOME:-$HOME/.local/share}/liquid-agent"
+    node_os="linux"
+    ;;
+  *)
+    echo "Liquid Agent runs on macOS and Linux." >&2
+    exit 1
+    ;;
+esac
 NODE_VERSION="22.11.0"
 
 find_node() {
   for candidate in "$(command -v node 2>/dev/null || true)" /opt/homebrew/bin/node /usr/local/bin/node "$HOME/.local/bin/node" "$DATA/node/bin/node"; do
     [ -n "$candidate" ] && [ -x "$candidate" ] || continue
     major="$("$candidate" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-    if [ "$major" -ge 20 ]; then
+    if [ "$major" -ge 22 ]; then
       echo "$candidate"
       return
     fi
@@ -21,10 +34,13 @@ find_node() {
 NODE="$(find_node)"
 if [ -z "$NODE" ]; then
   arch="$(uname -m)"
-  [ "$arch" = "x86_64" ] && arch="x64"
+  case "$arch" in
+    x86_64) arch="x64" ;;
+    aarch64) arch="arm64" ;;
+  esac
   echo "Getting Node.js $NODE_VERSION (one time only)…"
   mkdir -p "$DATA/node"
-  curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-darwin-$arch.tar.gz" | tar -xz -C "$DATA/node" --strip-components 1
+  curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-$node_os-$arch.tar.gz" | tar -xz -C "$DATA/node" --strip-components 1
   NODE="$DATA/node/bin/node"
 fi
 export PATH="$(dirname "$NODE"):$PATH"

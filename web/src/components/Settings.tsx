@@ -27,7 +27,7 @@ import { api } from "../api";
 import { speak, stopSpeaking } from "../audio/speak";
 import { errorToast, toast, useStore } from "../store";
 import type { Part, Settings as SettingsType } from "../types";
-import { cx } from "../util";
+import { DEVICE, IS_MAC, cx } from "../util";
 import { MODES, modeNote } from "./Composer";
 import { Logo } from "./Sidebar";
 import { Modal, Progress, Segmented, StatusDot, Toggle } from "./ui";
@@ -169,7 +169,7 @@ function Voice({ settings }: { settings: SettingsType }) {
   return (
     <>
       <h3>Voice</h3>
-      <p className="muted">Voice chat, dictation and reading aloud all use LFM3 Omni 2B on this Mac.</p>
+      <p className="muted">Voice chat, dictation and reading aloud all use LFM3 Omni 2B on this {DEVICE}.</p>
       <Row title="Voice">
         <Segmented
           size="sm"
@@ -180,7 +180,7 @@ function Voice({ settings }: { settings: SettingsType }) {
             { value: "male", label: "Voice B" },
           ]}
         />
-        <button className="btn" onClick={() => (speaking ? stopSpeaking() : speak("preview", "Hi! This is how I sound. I run right here on your Mac."))}>
+        <button className="btn" onClick={() => (speaking ? stopSpeaking() : speak("preview", `Hi! This is how I sound. I run right here on your ${DEVICE}.`))}>
           {speaking ? <Square size={12} fill="currentColor" /> : <Volume2 size={14} />} {speaking ? "Stop" : "Hear it"}
         </button>
       </Row>
@@ -197,7 +197,7 @@ function Safety({ settings }: { settings: SettingsType }) {
   return (
     <>
       <h3>Safety</h3>
-      <p className="muted">Choose how much Liquid Agent can do without asking. Reading things is always fine; changes to your Mac depend on this.</p>
+      <p className="muted">Choose how much Liquid Agent can do without asking. Reading things is always fine; changes to your {DEVICE} depend on this.</p>
       <div className="mode-cards">
         {MODES.map((m) => (
           <button key={m.value} className={cx("mode-card", settings.approvalMode === m.value && "selected")} onClick={() => patch({ approvalMode: m.value })}>
@@ -331,14 +331,14 @@ function Downloads() {
           </button>
         )}
       </div>
-      <p className="muted">Everything runs on this Mac. Liquid Agent picks the right model for each message by itself.</p>
+      <p className="muted">Everything runs on this {DEVICE}. Liquid Agent picks the right model for each message by itself.</p>
       <div className="parts">
         {parts.map((p) => (
           <PartRow key={p.id} part={p} />
         ))}
       </div>
       <button className="btn" onClick={() => api("POST", "/api/reveal").catch(errorToast)}>
-        <FolderOpen size={14} /> Show files in Finder
+        <FolderOpen size={14} /> {IS_MAC ? "Show files in Finder" : "Show files"}
       </button>
     </>
   );
@@ -478,7 +478,7 @@ export function Setup() {
       <div className="setup-card">
         <Logo size={52} />
         <h1>Welcome to Liquid Agent</h1>
-        <p className="muted">A private assistant that lives on your Mac. Download it once and it works offline. Nothing you say leaves this computer.</p>
+        <p className="muted">A private assistant that lives on your {DEVICE}. Download it once and it works offline. Nothing you say leaves this computer.</p>
         <label className="field">
           <span>What should I call you?</span>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your first name (optional)" />
@@ -491,7 +491,7 @@ export function Setup() {
             </span>
             <span className="plan-size">About {gbText(planBytes(parts, PLANS.all, size))}</span>
             <ul>
-              <li>Chat, writing and actions on your Mac</li>
+              <li>Chat, writing and actions on your {DEVICE}</li>
               <li>Voice chat, pictures and your screen</li>
               <li>Auto 200M, which approves safe actions for you</li>
               <li>Clicks around websites for you</li>
@@ -503,7 +503,7 @@ export function Setup() {
             </span>
             <span className="plan-size">About {gbText(planBytes(parts, PLANS.text, size))}</span>
             <ul>
-              <li>Chat, writing and actions on your Mac</li>
+              <li>Chat, writing and actions on your {DEVICE}</li>
               <li>Add voice and the rest later in Settings</li>
             </ul>
           </button>
@@ -511,14 +511,14 @@ export function Setup() {
         <div className="size-pick">
           <div className="size-pick-head">
             <span>Model size</span>
-            {memoryGB > 0 && <span className="muted small">This Mac has {memoryGB} GB of memory</span>}
+            {memoryGB > 0 && <span className="muted small">This {DEVICE} has {memoryGB} GB of memory</span>}
           </div>
           <div className="size-options">
             {SIZES.map((x) => (
               <button key={x.id} className={cx("size-option", sizeId === x.id && "selected")} onClick={() => setSizeId(x.id)}>
                 <span className="size-label">
                   {x.label}
-                  {x.id === suggested && <span className="pill pill-accent">For this Mac</span>}
+                  {x.id === suggested && <span className="pill pill-accent">For this {DEVICE}</span>}
                 </span>
                 <span className="size-detail">{x.detail}</span>
               </button>

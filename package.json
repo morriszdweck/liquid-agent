@@ -3,17 +3,18 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "A private AI agent for your Mac that runs LFM3 1.7B and LFM3 Omni 2B locally, with a web UI.",
+  "description": "A private AI agent for macOS and Linux that runs LFM3 1.7B and LFM3 Omni 2B locally, with a web UI.",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "vite build",
     "start": "node server/index.js --open",
     "serve": "node server/index.js",
     "dev": "vite build --watch --mode development & node --watch-path=server server/index.js",
-    "typecheck": "tsc --noEmit -p web"
+    "typecheck": "tsc --noEmit -p web",
+    "test": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "ws": "8.18.0"

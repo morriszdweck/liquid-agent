@@ -6,8 +6,8 @@ Serves P(deny) for a proposed tool call on 127.0.0.1 only.
     GET  /health -> {"ok": true, "model": "..."}
 
 Uses ProCreations/auto-200m-2-int4 through the repo's own auto_quant.py loader
-(plain PyTorch; picks Apple MPS, then CPU), and its build_input so the text
-matches what the model was trained on.
+(plain PyTorch; picks Apple MPS, then CPU; Linux gets the CPU build of
+PyTorch), and its build_input so the text matches what the model was trained on.
 """
 
 import argparse

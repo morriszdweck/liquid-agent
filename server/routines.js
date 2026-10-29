@@ -1,7 +1,7 @@
 // One-click tasks that can also run on a schedule. Each run is a new chat.
 
 import crypto from "node:crypto";
-import { bus, load, save } from "./core.js";
+import { IS_MAC, bus, load, save } from "./core.js";
 import { agent } from "./agent.js";
 
 const STARTERS = [
@@ -27,10 +27,12 @@ const STARTERS = [
     schedule: { enabled: false, time: "12:00", days: [0, 1, 2, 3, 4, 5, 6] },
   },
   {
-    name: "Check my Mac",
+    name: IS_MAC ? "Check my Mac" : "Check my computer",
     icon: "gauge",
     color: "#22c55e",
-    prompt: "Check my Mac's health: free disk space, memory pressure, battery condition and uptime. Use shell commands, then explain the results simply.",
+    prompt: IS_MAC
+      ? "Check my Mac's health: free disk space, memory pressure, battery condition and uptime. Use shell commands, then explain the results simply."
+      : "Check my computer's health: free disk space, memory use, battery condition if it has one, uptime and failed system services. Use shell commands, then explain the results simply.",
     schedule: { enabled: false, time: "09:00", days: [1] },
   },
 ];

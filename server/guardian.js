@@ -1,7 +1,8 @@
 // Auto 200M INT4 decides whether a proposed action is safe. A few shell
 // commands are never left to a model: they always ask the user.
 
-import { isLocal, settings } from "./core.js";
+import { IS_MAC, isLocal, settings } from "./core.js";
+import { copyCommand } from "./platform.js";
 
 const HARD_DENY = [
   "rm -rf /",
@@ -25,6 +26,22 @@ const HARD_DENY = [
   "> /dev/",
   "shutdown",
   "reboot",
+  // Linux
+  "pkexec",
+  "doas ",
+  "su -",
+  "su root",
+  "systemctl stop",
+  "systemctl disable",
+  "systemctl mask",
+  "systemctl isolate",
+  "wipefs",
+  "fdisk",
+  "parted ",
+  "mkswap",
+  "poweroff",
+  "crontab -r",
+  "chattr ",
 ];
 
 /** True when the action is risky enough that a person must decide. */
@@ -54,9 +71,9 @@ export function forAuto(tool, args = {}) {
     case "fetch_url":
       return { tool: "WebFetch", args: String(args.url ?? "") };
     case "open":
-      return { tool: "Bash", args: `open ${JSON.stringify(String(args.target ?? ""))}` };
+      return { tool: "Bash", args: `${IS_MAC ? "open" : "xdg-open"} ${JSON.stringify(String(args.target ?? ""))}` };
     case "set_clipboard":
-      return { tool: "Bash", args: `pbcopy <<< ${JSON.stringify(String(args.text ?? ""))}` };
+      return { tool: "Bash", args: `${copyCommand()} <<< ${JSON.stringify(String(args.text ?? ""))}` };
     default:
       return { tool, args: compact(args) };
   }

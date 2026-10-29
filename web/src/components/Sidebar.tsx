@@ -19,7 +19,7 @@ import {
 import { api } from "../api";
 import { errorToast, go, part, useStore } from "../store";
 import type { Chat } from "../types";
-import { chatMarkdown, cx, download, groupChats } from "../util";
+import { IS_MAC, chatMarkdown, cx, download, groupChats } from "../util";
 import { IconButton, Menu, Spinner, StatusDot } from "./ui";
 
 export function Logo({ size = 22 }: { size?: number }) {
@@ -81,7 +81,7 @@ export function Sidebar() {
           <button className={cx("nav-row", route.page === "chat" && !activeId && "active")} onClick={() => go("#/")}>
             <SquarePen size={17} />
             <span>New chat</span>
-            <kbd>⌘⇧O</kbd>
+            <kbd>{IS_MAC ? "⌘⇧O" : "Ctrl+Shift+O"}</kbd>
           </button>
           {nav.map((n) => (
             <button key={n.page} className={cx("nav-row", route.page === n.page && "active")} onClick={() => go(n.hash)}>

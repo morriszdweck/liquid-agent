@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Build and smoke test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: for f in server/*.js scripts/*.mjs; do node --check "$f"; done
+      - run: bash -n install.sh && bash -n scripts/start.sh
+      - run: npm test
+
+  desktop:
+    name: Linux desktop tools (X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update && sudo apt-get install -y xvfb xclip imagemagick ffmpeg pandoc libnotify-bin dunst dbus-x11
+      - run: npm ci --omit=dev
+      - name: Check the clipboard, screen, conversions and ports
+        run: |
+          xvfb-run -a dbus-run-session -- bash -c '
+            dunst & sleep 1
+            node scripts/desktop-check.mjs'
+
+  install:
+    name: One-line install on ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "debian:12", "fedora:41"]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install curl and tar
+        run: |
+          if command -v apt-get >/dev/null; then apt-get update && apt-get install -y curl ca-certificates tar gzip procps
+          else dnf install -y curl tar gzip procps-ng findutils gawk; fi
+      - uses: actions/checkout@v4
+      - name: Run install.sh from this commit; it starts, has an app menu entry and a command
+        run: |
+          tar -czf /tmp/source.tar.gz --transform 's,^\.,liquid-agent,' --exclude=./.git .
+          LIQUID_AGENT_SOURCE=/tmp/source.tar.gz bash install.sh
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:8170/healthz && break; sleep 1; done
+          curl -fs http://127.0.0.1:8170/healthz | grep -q liquid-agent
+          test -f "$HOME/.local/share/applications/liquid-agent.desktop"
+          test -x "$HOME/.local/bin/liquid-agent"
+          test -x "$HOME/.liquid-agent/node/bin/node"
+          "$HOME/.local/bin/liquid-agent" stop
+      - if: failure()
+        run: cat "$HOME/.local/share/liquid-agent/logs/"*.log || true
+
+  models:
+    name: LFM3 1.7B answers on ${{ matrix.os }} (CPU)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Download the engine and the smallest LFM3 1.7B, chat and run a tool
+        run: node scripts/smoke.mjs --models
+        timeout-minutes: 40
+
+  helpers:
+    name: Safety and Web helpers on Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Install Auto 200M and Betterwright and start them
+        run: node scripts/smoke.mjs --helpers
+        timeout-minutes: 40

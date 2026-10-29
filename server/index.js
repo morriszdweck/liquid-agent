@@ -5,9 +5,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { WebSocketServer } from "ws";
 import { DATA, ROOT, bus, flushAll, settings, updateSettings } from "./core.js";
+import { openPath, reveal } from "./platform.js";
 import { backends } from "./backends.js";
 import { agent } from "./agent.js";
 import { memory } from "./memory.js";
@@ -226,7 +226,11 @@ route("POST", "/api/parts/(\\w+)/start", (_, [id]) => {
 });
 route("POST", "/api/parts/(\\w+)/stop", (_, [id]) => backends.stop(id));
 route("POST", "/api/reveal", async () => {
-  spawn("open", [DATA]).on("error", () => {});
+  try {
+    await reveal(DATA);
+  } catch (e) {
+    throw new HttpError(501, `${e.message} The files are in ${DATA}`);
+  }
 });
 
 function notFound() {
@@ -316,9 +320,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 function openBrowser() {
-  const url = `http://127.0.0.1:${PORT}`;
-  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-  spawn(cmd, [url], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
+  openPath(`http://127.0.0.1:${PORT}`).catch(() => console.log(`Open http://127.0.0.1:${PORT} in your browser.`));
 }
 
 server.on("error", async (e) => {

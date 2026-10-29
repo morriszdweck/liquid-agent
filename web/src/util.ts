@@ -1,5 +1,10 @@
 import type { Chat } from "./types";
 
+// The web UI is served to the same computer the server runs on, so the browser's platform is that computer's.
+export const IS_MAC = /Mac/.test(navigator.platform || navigator.userAgent);
+/** How the UI names this computer. */
+export const DEVICE = IS_MAC ? "Mac" : "computer";
+
 export const cx = (...names: (string | false | null | undefined)[]) => names.filter(Boolean).join(" ");
 
 export function timeAgo(at: number) {

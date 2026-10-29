@@ -6,18 +6,21 @@
 //       "safe"  changes nothing outside the app (memory, reminders)
 //       "write" changes something, so Auto 200M or the user must approve it
 
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DIRS, bus, isLocal, load, run, save, settings, shell } from "./core.js";
+import { DIRS, SHELL, bus, isLocal, load, save, settings, shell } from "./core.js";
 import { backends } from "./backends.js";
 import { memory } from "./memory.js";
 import { look, transcribe } from "./omni.js";
+import { notify, openApp, openPath, pictureForModel, readClipboard, screenshot, toWav, writeClipboard } from "./platform.js";
 
 const HOME = os.homedir();
-const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+const UA =
+  process.platform === "darwin"
+    ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+    : "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 const p = (name, desc, extra = {}) => ({ name, desc, type: "string", ...extra });
 const short = (s, n = 60) => {
@@ -59,7 +62,7 @@ function decode(s) {
     .replace(/&amp;/g, "&");
 }
 
-/** Only public web addresses: a web page must not steer the agent into this Mac's own services. */
+/** Only public web addresses: a web page must not steer the agent into this computer's own services. */
 function publicURL(raw) {
   let url;
   try {
@@ -135,7 +138,7 @@ function fireReminders() {
   bus.emit("reminders", { reminders });
   for (const r of due) {
     bus.emit("notify", { title: "Reminder", body: r.text });
-    run("osascript", ["-e", "on run argv", "-e", 'display notification (item 1 of argv) with title "Liquid Agent" sound name "Glass"', "-e", "end run", r.text]).catch(() => {});
+    notify(r.text).catch(() => {});
   }
 }
 setInterval(fireReminders, 15_000).unref();
@@ -155,7 +158,7 @@ const browserRunning = () => backends.running("browser");
 export const TOOLS = [
   {
     name: "shell",
-    desc: "run a zsh command",
+    desc: `run a ${path.basename(SHELL)} command`,
     params: [p("command", "the command")],
     kind: "write",
     label: (a) => `Ran \`${short(a.command, 80)}\``,
@@ -214,11 +217,11 @@ export const TOOLS = [
     async run(a) {
       const target = String(a.target ?? "").trim();
       if (/^https?:\/\//i.test(target) || /^[\w-]+(\.[\w-]+)+(\/|$)/.test(target)) {
-        await run("open", [publicURL(target)]);
+        await openPath(publicURL(target));
       } else if (fs.existsSync(expand(target))) {
-        await run("open", [expand(target)]);
+        await openPath(expand(target));
       } else {
-        await run("open", ["-a", target]);
+        await openApp(target);
       }
       return `Opened ${target}.`;
     },
@@ -300,13 +303,15 @@ export const TOOLS = [
     available: omniRunning,
     label: () => "Looked at your screen",
     async run(a, ctx) {
-      const file = path.join(DIRS.uploads, `screen-${crypto.randomUUID()}.jpg`);
+      const file = path.join(DIRS.uploads, `screen-${crypto.randomUUID()}.png`);
+      const tmp = file.replace(/\.png$/, ".jpg");
       try {
-        await run("screencapture", ["-x", "-C", "-t", "jpg", file]);
-        await run("sips", ["-Z", "1280", file]);
-        return await look(fs.readFileSync(file), "image/jpeg", String(a.question || "Describe what is on this screen."), ctx);
+        await screenshot(file);
+        const picture = await pictureForModel(file, tmp);
+        return await look(picture.data, picture.mime, String(a.question || "Describe what is on this screen."), ctx);
       } finally {
         fs.rmSync(file, { force: true });
+        fs.rmSync(tmp, { force: true });
       }
     },
   },
@@ -321,8 +326,8 @@ export const TOOLS = [
       const file = expand(a.path);
       const tmp = path.join(DIRS.uploads, `look-${crypto.randomUUID()}.jpg`);
       try {
-        await run("sips", ["-s", "format", "jpeg", "-Z", "1280", file, "--out", tmp]);
-        return await look(fs.readFileSync(tmp), "image/jpeg", String(a.question || "Describe this picture."), ctx);
+        const picture = await pictureForModel(file, tmp);
+        return await look(picture.data, picture.mime, String(a.question || "Describe this picture."), ctx);
       } finally {
         fs.rmSync(tmp, { force: true });
       }
@@ -339,7 +344,7 @@ export const TOOLS = [
     async run(a, ctx) {
       const tmp = path.join(DIRS.uploads, `hear-${crypto.randomUUID()}.wav`);
       try {
-        await run("afconvert", ["-f", "WAVE", "-d", "LEI16@16000", "-c", "1", expand(a.path), tmp]);
+        await toWav(expand(a.path), tmp);
         return await transcribe(fs.readFileSync(tmp), ctx);
       } finally {
         fs.rmSync(tmp, { force: true });
@@ -369,7 +374,7 @@ export const TOOLS = [
     params: [],
     kind: "read",
     label: () => "Read the clipboard",
-    run: () => run("pbpaste", []),
+    run: () => readClipboard(),
   },
   {
     name: "set_clipboard",
@@ -377,12 +382,7 @@ export const TOOLS = [
     params: [p("text", "text to copy")],
     kind: "safe",
     label: () => "Copied to the clipboard",
-    run: (a) =>
-      new Promise((resolve, reject) => {
-        const child = spawnStdin("pbcopy", String(a.text ?? ""));
-        child.on("close", () => resolve("Copied."));
-        child.on("error", reject);
-      }),
+    run: (a) => writeClipboard(String(a.text ?? "")).then(() => "Copied."),
   },
   {
     name: "reminder",
@@ -400,12 +400,6 @@ export const TOOLS = [
     },
   },
 ];
-
-function spawnStdin(cmd, input) {
-  const child = spawn(cmd, []);
-  child.stdin.end(input);
-  return child;
-}
 
 export const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
 

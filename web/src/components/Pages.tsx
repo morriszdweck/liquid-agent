@@ -27,7 +27,7 @@ import {
 import { api } from "../api";
 import { errorToast, go, part, toast, useStore } from "../store";
 import type { Chat, Routine } from "../types";
-import { clock, cx, timeAgo } from "../util";
+import { DEVICE, clock, cx, timeAgo } from "../util";
 import { STARTERS } from "./ChatView";
 import { Page } from "./Shell";
 import { ToolIcon } from "./Steps";
@@ -62,7 +62,7 @@ export function ForYou() {
         </button>
       }
     >
-      <p className="page-lead">Ideas picked from what Liquid Agent knows about you. Everything stays on this Mac.</p>
+      <p className="page-lead">Ideas picked from what Liquid Agent knows about you. Everything stays on this {DEVICE}.</p>
       <div className="idea-grid big">
         {(ideas.items.length ? ideas.items : STARTERS).map((idea) => (
           <button key={idea.title} className="idea-card" onClick={() => startChat(idea.prompt)}>
@@ -420,7 +420,7 @@ export function Activity() {
         )
       }
     >
-      <p className="page-lead">Every action Liquid Agent took on your Mac, and who approved it.</p>
+      <p className="page-lead">Every action Liquid Agent took on your {DEVICE}, and who approved it.</p>
       <div className="filters">
         {(
           [
@@ -454,7 +454,7 @@ export function Activity() {
         </div>
       ) : (
         <Empty icon={<History size={22} />} title={activity.length ? "Nothing matches" : "No activity yet"}>
-          {activity.length ? "Try another filter." : "When Liquid Agent uses your Mac, files or the web, it shows up here."}
+          {activity.length ? "Try another filter." : `When Liquid Agent uses your ${DEVICE}, files or the web, it shows up here.`}
         </Empty>
       )}
     </Page>
