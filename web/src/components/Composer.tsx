@@ -24,7 +24,7 @@ import { api, fileURL, transcribe, upload } from "../api";
 import { Mic as Microphone, wav } from "../audio/capture";
 import { errorToast, go, part, toast, useStore } from "../store";
 import type { ApprovalMode, Attachment, Chat, Part } from "../types";
-import { captureScreen, cx, prepareImage } from "../util";
+import { DEVICE, captureScreen, cx, prepareImage } from "../util";
 import { Menu, Spinner } from "./ui";
 
 type Pending = { key: string; name: string; kind: Attachment["kind"]; preview?: string; uploaded?: Attachment; failed?: boolean };
@@ -257,9 +257,11 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }
 
   const mode = MODES.find((m) => m.value === settings?.approvalMode) ?? MODES[0];
-  const needsOmni = files.some((f) => f.kind === "image" || f.kind === "audio");
-  const lastModel = chat?.messages.filter((m) => m.role === "assistant").at(-1)?.model;
-  const modelHint = needsOmni ? "LFM3 Omni 2B" : lastModel === "omni" && chat?.messages.slice(-4).some((m) => m.attachments?.some((a) => a.kind !== "text")) ? "LFM3 Omni 2B" : "LFM3 1.7B";
+  // The server's rule (agent.route): Omni when this message or the one before has a picture or audio, or when 1.7B is off.
+  const media = (list?: { kind: string }[]) => Boolean(list?.some((f) => f.kind === "image" || f.kind === "audio"));
+  const lastAsk = chat?.messages.filter((m) => m.role === "user").at(-1);
+  const usesOmni = media(files) || media(lastAsk?.attachments) || (omniUp && part(parts, "small")?.status !== "running");
+  const modelHint = usesOmni ? "LFM3 Omni 2B" : "LFM3 1.7B";
 
   return (
     <div className="composer-wrap">
@@ -322,7 +324,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
             ref={area}
             value={text}
             rows={1}
-            placeholder={chat?.messages.length ? "Reply to Liquid Agent…" : "Ask anything, or tell me what to do on your Mac"}
+            placeholder={chat?.messages.length ? "Reply to Liquid Agent…" : `Ask anything, or tell me what to do on your ${DEVICE}`}
             onChange={(e) => {
               setText(e.target.value);
               if (!e.target.value) keepDraft("");
@@ -411,10 +413,17 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
           Auto · {modelHint}
         </span>
         <button
-          className={cx("foot-btn", settings?.reasoning && "on")}
+          className={cx("foot-btn", usesOmni ? "unavailable" : settings?.reasoning && "on")}
           aria-pressed={Boolean(settings?.reasoning)}
-          title={settings?.reasoning ? "LFM3 1.7B thinks before answering: slower, better answers. Click to turn off." : "Answers right away. Click to have LFM3 1.7B think first."}
-          onClick={() => api("PATCH", "/api/settings", { reasoning: !settings?.reasoning }).catch(errorToast)}
+          aria-disabled={usesOmni}
+          title={
+            usesOmni
+              ? "Thinking is unavailable right now."
+              : settings?.reasoning
+                ? "LFM3 1.7B thinks before answering: slower, better answers. Click to turn off."
+                : "Answers right away. Click to have LFM3 1.7B think first."
+          }
+          onClick={() => usesOmni || api("PATCH", "/api/settings", { reasoning: !settings?.reasoning }).catch(errorToast)}
         >
           <Lightbulb size={14} />
           Think

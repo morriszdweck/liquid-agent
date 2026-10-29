@@ -1798,6 +1798,15 @@ input[type="range"] {
 .foot-btn.on:hover {
   background: var(--accent-soft);
 }
+/* LFM3 Omni 2B can't think, so the button rests while Omni is answering. */
+.foot-btn.unavailable {
+  opacity: 0.4;
+  cursor: default;
+}
+.foot-btn.unavailable:hover {
+  background: none;
+  color: var(--fg-2);
+}
 .foot-model {
   margin-left: auto;
   color: var(--fg-3);
