@@ -52,8 +52,10 @@ export function Sidebar() {
   const omni = part(parts, "omni");
   const up = [small, omni].filter((p) => p?.status === "running");
   const starting = [small, omni].some((p) => p?.status === "starting" || p?.status === "installing");
-  const status =
-    up.length === 2
+  const fetching = parts.find((p) => p.status === "installing");
+  const status = fetching
+    ? { tone: "busy" as const, text: `Downloading ${fetching.title.toLowerCase()}${fetching.fraction ? ` · ${Math.round(fetching.fraction * 100)}%` : "…"}` }
+    : up.length === 2
       ? { tone: "ok" as const, text: "Ready · 1.7B + Omni" }
       : up.length === 1
         ? { tone: "ok" as const, text: `Ready · ${up[0]!.id === "omni" ? "Omni" : "1.7B"}` }

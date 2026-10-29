@@ -28,7 +28,7 @@ import { speak, stopSpeaking } from "../audio/speak";
 import { errorToast, toast, useStore } from "../store";
 import type { Part, Settings as SettingsType } from "../types";
 import { cx } from "../util";
-import { MODES } from "./Composer";
+import { MODES, modeNote } from "./Composer";
 import { Logo } from "./Sidebar";
 import { Modal, Progress, Segmented, StatusDot, Toggle } from "./ui";
 
@@ -123,6 +123,9 @@ function General({ settings }: { settings: SettingsType }) {
           <option value="professional">Professional</option>
         </select>
       </Row>
+      <Row title="Think before answering" detail="LFM3 1.7B works it out first, then answers. Slower, but much better answers. LFM3 Omni 2B can't think, so pictures and audio are answered right away. Also under the message box.">
+        <Toggle checked={settings.reasoning} onChange={(reasoning) => patch({ reasoning })} />
+      </Row>
       <Row title="Appearance">
         <Segmented
           size="sm"
@@ -190,6 +193,7 @@ function Voice({ settings }: { settings: SettingsType }) {
 
 function Safety({ settings }: { settings: SettingsType }) {
   const guardian = useStore((s) => s.parts.find((p) => p.id === "guardian"));
+  const wanted = useStore((s) => s.guardianWanted);
   return (
     <>
       <h3>Safety</h3>
@@ -200,12 +204,18 @@ function Safety({ settings }: { settings: SettingsType }) {
             <span className="mode-icon">{m.icon}</span>
             <span className="mode-title">{m.label}</span>
             <span className="mode-detail">{m.detail}</span>
+            {m.value === "approveForMe" && modeNote(guardian, wanted) && <span className="mode-need">{modeNote(guardian, wanted)}</span>}
             {settings.approvalMode === m.value && <Check size={15} className="mode-check" />}
           </button>
         ))}
       </div>
-      {settings.approvalMode === "approveForMe" && guardian?.status !== "running" && (
-        <div className="notice">The Safety helper isn't running, so it will ask you instead. Get it in Downloads.</div>
+      {guardian && (wanted || (settings.approvalMode === "approveForMe" && guardian.status !== "running")) && (
+        <div className="parts">
+          <PartRow part={guardian} />
+        </div>
+      )}
+      {settings.approvalMode === "approveForMe" && guardian?.status !== "running" && !wanted && (
+        <div className="notice">Auto 200M isn't running right now, so every action asks you until it's back.</div>
       )}
       <Row title="How careful Auto 200M is" detail={`Asks you when it's less than ${Math.round((1 - settings.guardianThreshold) * 100)}% sure an action is safe.`}>
         <input
@@ -225,6 +235,7 @@ function Safety({ settings }: { settings: SettingsType }) {
 export function PartRow({ part }: { part: Part }) {
   const busy = useStore((s) => s.busy);
   const act = (path: string, body?: unknown) => api("POST", path, body).catch(errorToast);
+  const changing = busy || part.status === "installing" || part.status === "starting";
   const tone = part.status === "running" ? "ok" : part.status === "failed" ? "bad" : part.status === "installing" || part.status === "starting" ? "busy" : "off";
   const label = {
     missing: "Not downloaded",
@@ -234,6 +245,7 @@ export function PartRow({ part }: { part: Part }) {
     running: "Ready",
     failed: part.error || "Something went wrong",
   }[part.status];
+  const note = part.queued && part.status !== "installing" ? "Waiting its turn…" : part.live ? `${label} · the current size keeps working meanwhile` : label;
 
   return (
     <div className={cx("part", `status-${part.status}`)}>
@@ -243,19 +255,39 @@ export function PartRow({ part }: { part: Part }) {
           {part.title} <span className="muted small">· {part.size}</span>
         </div>
         <div className="part-detail">{part.detail}</div>
+        {part.quants && (
+          <label className="part-size">
+            <span>Size</span>
+            <select
+              className="input"
+              value={part.quant}
+              disabled={changing}
+              title={changing ? "Wait for the current download to finish" : undefined}
+              onChange={(e) => patch({ [`${part.id}Quant`]: e.target.value } as Partial<SettingsType>)}
+            >
+              {part.quants.map((q) => (
+                <option key={q.id} value={q.id}>
+                  {q.label} · {q.size}
+                  {q.note ? ` · ${q.note}` : ""}
+                  {q.onDisk ? " ✓" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className={cx("part-status", part.status === "failed" && "bad")}>
-          <StatusDot tone={tone} /> {label}
+          <StatusDot tone={part.queued ? "busy" : tone} /> {note}
         </div>
         {part.status === "installing" && <Progress value={part.fraction} />}
       </div>
       <div className="part-actions">
-        {part.status === "missing" && (
-          <button className="btn primary" onClick={() => act("/api/parts/install", { ids: part.id === "engine" ? ["engine"] : ["engine", part.id] })} disabled={busy}>
+        {part.status === "missing" && !part.queued && (
+          <button className="btn primary" onClick={() => act("/api/parts/install", { ids: part.id === "engine" ? ["engine"] : ["engine", part.id] })}>
             <Download size={14} /> Get
           </button>
         )}
-        {part.status === "failed" && (
-          <button className="btn primary" onClick={() => act("/api/parts/install", { ids: [part.id] })} disabled={busy}>
+        {part.status === "failed" && !part.queued && (
+          <button className="btn primary" onClick={() => act("/api/parts/install", { ids: [part.id] })}>
             <RotateCcw size={14} /> Try again
           </button>
         )}
@@ -344,30 +376,85 @@ function Advanced({ settings }: { settings: SettingsType }) {
 
 // ---- First run ----
 
+const SIZES = [
+  { id: "small", label: "Smaller", detail: "Fastest, least space", small: "QAD-Q4_0", omni: "Q4_0" },
+  { id: "balanced", label: "Balanced", detail: "Good answers, quick", small: "Q4_K_M", omni: "Q4_K_M" },
+  { id: "best", label: "Best", detail: "Best answers, needs more memory", small: "Q8_0", omni: "Q8_0" },
+] as const;
+type SizeId = (typeof SIZES)[number]["id"];
+
+const PLANS = {
+  all: ["engine", "small", "omni", "guardian", "browser"],
+  text: ["engine", "small"],
+} as const;
+
+const gbText = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
+
+/** Bytes a plan downloads with a given size, from what the server says each part weighs. */
+function planBytes(parts: Part[], ids: readonly Part["id"][], size: (typeof SIZES)[number]) {
+  return ids.reduce((sum, id) => {
+    const p = parts.find((x) => x.id === id);
+    if (!p || p.status === "installed" || p.status === "running") return sum;
+    if (!p.quants) return sum + p.bytes;
+    const current = p.quants.find((q) => q.id === p.quant);
+    const chosen = p.quants.find((q) => q.id === (id === "small" ? size.small : size.omni));
+    // Omni's bytes include its audio and vision projector on top of the weights.
+    return sum + (chosen?.bytes ?? 0) + (p.bytes - (current?.bytes ?? 0));
+  }, 0);
+}
+
 export function Setup() {
-  const { parts, busy, settings } = useStore();
-  const [plan, setPlan] = useState<"all" | "text">("all");
+  const { parts, busy, settings, machine } = useStore();
+  const memoryGB = machine.memoryGB;
+  const suggested: SizeId = memoryGB >= 16 ? "best" : memoryGB > 0 && memoryGB < 8 ? "small" : "balanced";
+  const [plan, setPlan] = useState<keyof typeof PLANS>("all");
+  const [sizeId, setSizeId] = useState<SizeId>(suggested);
   const [name, setName] = useState(settings?.userName ?? "");
+  const size = SIZES.find((x) => x.id === sizeId)!;
   const installing = busy || parts.some((p) => p.status === "installing");
   const failed = parts.filter((p) => p.status === "failed");
 
   const go = async () => {
-    if (name.trim() && name !== settings?.userName) await patch({ userName: name.trim() });
-    await api("POST", "/api/parts/install", { ids: plan === "all" ? ["engine", "small", "omni", "guardian", "browser"] : ["engine", "small"] }).catch(errorToast);
+    try {
+      await api("PATCH", "/api/settings", { userName: name.trim(), smallQuant: size.small, omniQuant: size.omni });
+      await api("POST", "/api/parts/install", { ids: PLANS[plan] });
+      // Approve for Me turns itself on once Auto 200M is ready.
+      if (plan === "all") await api("PATCH", "/api/settings", { approvalMode: "approveForMe" });
+    } catch (e) {
+      errorToast(e);
+    }
   };
 
   if (installing || failed.length) {
-    const shown = parts.filter((p) => p.status !== "missing");
-    const done = shown.filter((p) => p.status === "installed" || p.status === "running" || p.status === "starting").length;
+    const shown = parts.filter((p) => p.status !== "missing" || p.queued);
+    const total = shown.reduce((sum, p) => sum + p.bytes, 0);
+    const done = shown.reduce(
+      (sum, p) => sum + (p.status === "installing" ? (p.fraction ?? 0) * p.bytes : ["installed", "starting", "running"].includes(p.status) ? p.bytes : 0),
+      0,
+    );
+    const current = shown.find((p) => p.status === "installing");
     return (
       <div className="setup">
         <div className="setup-card">
           <Logo size={44} />
           <h1>{installing ? "Setting things up" : "Almost there"}</h1>
-          <p className="muted">
-            {installing ? `Downloading ${done + 1} of ${shown.length}. You can leave this open and come back; it keeps going.` : "Something didn't download. Check your internet and try again."}
-          </p>
-          <div className="parts">
+          {installing ? (
+            <>
+              <p className="muted">
+                {current ? `Getting ${current.title.toLowerCase()}. ` : ""}
+                You can leave this open and come back. Chat opens as soon as the first model is ready.
+              </p>
+              <div className="setup-progress">
+                <Progress value={total ? done / total : undefined} />
+                <span className="muted small">
+                  {gbText(done)} of {gbText(total)}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="muted">Something didn't download. Check your internet and try again.</p>
+          )}
+          <div className="parts compact">
             {shown.map((p) => (
               <PartRow key={p.id} part={p} />
             ))}
@@ -402,11 +489,11 @@ export function Setup() {
               <strong>Everything</strong>
               <span className="pill pill-accent">Recommended</span>
             </span>
-            <span className="plan-size">About 4 GB</span>
+            <span className="plan-size">About {gbText(planBytes(parts, PLANS.all, size))}</span>
             <ul>
               <li>Chat, writing and actions on your Mac</li>
               <li>Voice chat, pictures and your screen</li>
-              <li>A safety helper that approves for you</li>
+              <li>Auto 200M, which approves safe actions for you</li>
               <li>Clicks around websites for you</li>
             </ul>
           </button>
@@ -414,19 +501,36 @@ export function Setup() {
             <span className="plan-head">
               <strong>Just chat</strong>
             </span>
-            <span className="plan-size">About 1.1 GB</span>
+            <span className="plan-size">About {gbText(planBytes(parts, PLANS.text, size))}</span>
             <ul>
               <li>Chat, writing and actions on your Mac</li>
               <li>Add voice and the rest later in Settings</li>
             </ul>
           </button>
         </div>
+        <div className="size-pick">
+          <div className="size-pick-head">
+            <span>Model size</span>
+            {memoryGB > 0 && <span className="muted small">This Mac has {memoryGB} GB of memory</span>}
+          </div>
+          <div className="size-options">
+            {SIZES.map((x) => (
+              <button key={x.id} className={cx("size-option", sizeId === x.id && "selected")} onClick={() => setSizeId(x.id)}>
+                <span className="size-label">
+                  {x.label}
+                  {x.id === suggested && <span className="pill pill-accent">For this Mac</span>}
+                </span>
+                <span className="size-detail">{x.detail}</span>
+              </button>
+            ))}
+          </div>
+          <span className="muted small">You can change this later in Settings → Downloads.</span>
+        </div>
         <button className="btn primary big wide" onClick={go}>
           <Download size={17} /> Download and set up
         </button>
-        <p className="muted small">Downloads come from Hugging Face and GitHub. After that, no internet is needed except for web searches.</p>
+        <p className="muted small">Downloads come from Hugging Face, GitHub and the Python and npm package sites. After that, no internet is needed except for web searches.</p>
       </div>
     </div>
   );
 }
-

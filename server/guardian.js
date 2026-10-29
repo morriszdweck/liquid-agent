@@ -34,17 +34,32 @@ export function hardDeny(tool, args) {
   return HARD_DENY.some((pattern) => cmd.includes(pattern));
 }
 
-const sortedJSON = (value) =>
-  JSON.stringify(value, (_, v) =>
-    v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v,
-  );
-
-/** Formats the request the way Auto 200M was trained to read it. */
-export function buildInput(tool, args, request, history) {
-  const past = history.length
-    ? history.map((h, i) => `[${i + 1}] ${h.tool}(${sortedJSON(h.args)})\n-> ${String(h.result ?? "").slice(0, 400)}`).join("\n")
-    : "(no prior actions)";
-  return `### PROPOSED TOOL CALL\ntool: ${tool}\nargs: ${sortedJSON(args)}\n\n### USER REQUEST\n${request}\n\n### AGENT HISTORY\n${past}`;
+/**
+ * Auto 200M was trained on coding-agent tools (Bash, Read, Write, WebFetch…)
+ * with plain-string arguments, so actions are described to it in those terms.
+ */
+export function forAuto(tool, args = {}) {
+  const compact = (value) => JSON.stringify(value);
+  switch (tool) {
+    case "shell":
+      return { tool: "Bash", args: String(args.command ?? "") };
+    case "read_file":
+      return { tool: "Read", args: String(args.path ?? "") };
+    case "write_file":
+      return { tool: "Write", args: compact({ file_path: args.path, content: String(args.content ?? "").slice(0, 4000) }) };
+    case "list_dir":
+      return { tool: "LS", args: String(args.path ?? ".") };
+    case "web_search":
+      return { tool: "WebSearch", args: String(args.query ?? "") };
+    case "fetch_url":
+      return { tool: "WebFetch", args: String(args.url ?? "") };
+    case "open":
+      return { tool: "Bash", args: `open ${JSON.stringify(String(args.target ?? ""))}` };
+    case "set_clipboard":
+      return { tool: "Bash", args: `pbcopy <<< ${JSON.stringify(String(args.text ?? ""))}` };
+    default:
+      return { tool, args: compact(args) };
+  }
 }
 
 /** Returns P(deny), or null when the safety helper isn't available. */
@@ -54,7 +69,11 @@ export async function classify(tool, args, request, history) {
     const res = await fetch(`${settings.guardianURL}/classify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: buildInput(tool, args, request, history) }),
+      body: JSON.stringify({
+        ...forAuto(tool, args),
+        request: String(request ?? ""),
+        history: history.map((h) => ({ ...forAuto(h.tool, h.args), result: String(h.result ?? "").slice(0, 400) })),
+      }),
       signal: AbortSignal.timeout(20_000),
     });
     const body = await res.json();

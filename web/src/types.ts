@@ -30,6 +30,8 @@ export type Message = {
   voice?: boolean;
   interrupted?: boolean;
   stats?: { ms: number; tokens: number; tps: number };
+  thinking?: string;
+  thinkingMs?: number;
 };
 
 export type Chat = {
@@ -49,12 +51,21 @@ export type Part = {
   title: string;
   detail: string;
   size: string;
+  bytes: number;
   port?: number;
   status: PartStatus;
   text?: string;
   fraction?: number;
   error?: string;
+  /** Waiting for another download to finish. */
+  queued?: boolean;
+  /** Still answering with its old size while a new size downloads. */
+  live?: boolean;
+  quant?: string;
+  quants?: Quant[];
 };
+
+export type Quant = { id: string; label: string; bytes: number; size: string; note?: string; onDisk: boolean };
 
 export type ApprovalMode = "askAlways" | "approveForMe" | "fullAuto";
 
@@ -71,6 +82,9 @@ export type Settings = {
   toolOutputLimit: number;
   maxSteps: number;
   temperature: number;
+  reasoning: boolean;
+  smallQuant: string;
+  omniQuant: string;
   smallURL: string;
   omniURL: string;
   guardianURL: string;
@@ -109,6 +123,8 @@ export type Snapshot = {
   settings: Settings;
   parts: Part[];
   busy: boolean;
+  guardianWanted: boolean;
+  machine: { memoryGB: number };
   memory: string[];
   ideas: { at: number; items: Idea[] };
   routines: Routine[];

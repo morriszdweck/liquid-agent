@@ -22,6 +22,14 @@ const OPEN = ["pending", "checking", "approval", "running"];
 const TOOL_WORDS =
   /\b(files?|folders?|desktop|downloads|documents|disk|directory|open|launch|run|command|terminal|shell|install|apps?|mac|computer|search|google|look ?up|web|websites?|site|online|internet|url|links?|browse|browser|click|type into|news|weather|forecast|price|stocks?|score|latest|current|today|tonight|tomorrow|yesterday|now|recent|remind|reminder|remember|forget|recall|clipboard|copy|paste|screen|screenshot|save|read|list|delete|move|rename|battery|wi-?fi|my)\b|[~/]\w|\.[a-z]{2,4}\b/i;
 
+/** Some templates leave the thinking in the text instead of reporting it separately. */
+function splitThink(text) {
+  const m = text.match(/^\s*<think>([\s\S]*?)(?:<\/think>\s*|$)/);
+  return m ? { thought: m[1], rest: text.slice(m[0].length) } : { thought: "", rest: text };
+}
+
+const joinThoughts = (before, now) => [before, now.trim()].filter(Boolean).join("\n\n");
+
 function wantsTools(chat, request) {
   if (TOOL_WORDS.test(request.content ?? "")) return true;
   const prev = chat.messages.filter((m) => m.role === "assistant" && m.status !== "streaming").at(-1);
@@ -204,22 +212,33 @@ export const agent = {
         live = "";
         let shown = "";
         let last = 0;
+        const thinkStart = Date.now();
+        let thinkEnd = 0;
+        let thought = "";
+        // LFM3 Omni 2B is a non-reasoning model; only LFM3 1.7B thinks.
+        const think = settings.reasoning && route.id === "small";
         for await (const part of stream({
           url: model.url(),
           model: model.id,
           messages: wire,
           temperature: model.temperature(),
-          maxTokens: 1536,
+          maxTokens: think ? 6144 : 1536,
           stop: STOPS,
+          think,
           signal,
         })) {
+          if (part.reasoning) thought += part.reasoning;
           if (part.content) {
             live += part.content;
-            const visible = visibleText(live);
-            if (visible !== shown && Date.now() - last > 50) {
+            if (!thinkEnd && !/^\s*<think>(?![\s\S]*<\/think>)/.test(live)) thinkEnd = Date.now();
+          }
+          if (part.reasoning || part.content) {
+            const inline = splitThink(live);
+            const visible = visibleText(inline.rest);
+            if (Date.now() - last > 50 && (visible !== shown || part.reasoning || inline.thought)) {
               shown = visible;
               last = Date.now();
-              bus.emit("delta", { chatId: chat.id, messageId: reply.id, text: visible });
+              bus.emit("delta", { chatId: chat.id, messageId: reply.id, text: visible, thinking: joinThoughts(reply.thinking, thought + inline.thought) });
             }
           }
           if (part.timings) {
@@ -228,6 +247,13 @@ export const agent = {
           }
         }
 
+        const inline = splitThink(live);
+        thought += inline.thought;
+        live = inline.rest;
+        if (thought.trim()) {
+          reply.thinking = joinThoughts(reply.thinking, thought);
+          reply.thinkingMs = (reply.thinkingMs ?? 0) + ((thinkEnd || Date.now()) - thinkStart);
+        }
         const { text, call } = parseToolCall(live, new Map(tools.map((t) => [t.name, t])));
         live = "";
         if (!call) {
@@ -269,11 +295,11 @@ export const agent = {
     } catch (e) {
       if (signal.aborted) {
         reply.status = "stopped";
-        reply.content = reply.content || visibleText(live).trim();
+        reply.content = reply.content || visibleText(splitThink(live).rest).trim();
       } else {
         reply.status = "error";
         reply.error = String(e?.message ?? e);
-        reply.content = reply.content || visibleText(live).trim();
+        reply.content = reply.content || visibleText(splitThink(live).rest).trim();
       }
       for (const s of reply.steps) if (OPEN.includes(s.status)) Object.assign(s, { status: "denied", result: "Stopped." });
     } finally {
@@ -307,7 +333,7 @@ export const agent = {
     emitChat(chat);
     const history = message.steps.filter((x) => x !== step && x.status !== "denied").map((x) => ({ tool: x.tool, args: x.args, result: x.result }));
     const pDeny = await classify(step.tool, step.args, request, history);
-    if (pDeny === null) return ask("The safety helper isn't running, so I need your OK.");
+    if (pDeny === null) return ask("Auto 200M isn't ready yet, so I need your OK.");
     step.pDeny = Math.round(pDeny * 1000) / 1000;
     if (pDeny < settings.guardianThreshold) return { approved: true, decision: "Auto 200M approved" };
     return ask(`Auto 200M wasn't sure this is safe (${Math.round(pDeny * 100)}% risky).`);

@@ -3,10 +3,10 @@
 import { isLocal } from "./core.js";
 
 /**
- * Streams a chat completion. Yields {content}, then {usage} and {timings}
- * when the server reports them.
+ * Streams a chat completion. Yields {reasoning} while the model thinks (only
+ * with think on), {content}, then {usage} and {timings} when the server reports them.
  */
-export async function* stream({ url, model, messages, temperature = 0.3, maxTokens = 1024, stop, signal }) {
+export async function* stream({ url, model, messages, temperature = 0.3, maxTokens = 1024, stop, think = false, signal }) {
   if (!isLocal(url)) throw new Error("Refusing a model address that isn't on this computer.");
   let res;
   try {
@@ -23,7 +23,7 @@ export async function* stream({ url, model, messages, temperature = 0.3, maxToke
         stream: true,
         stream_options: { include_usage: true },
         cache_prompt: true,
-        chat_template_kwargs: { enable_thinking: false },
+        chat_template_kwargs: { enable_thinking: think },
       }),
     });
   } catch (e) {
@@ -58,6 +58,7 @@ export async function* stream({ url, model, messages, temperature = 0.3, maxToke
         continue;
       }
       const delta = event.choices?.[0]?.delta;
+      if (delta?.reasoning_content) yield { reasoning: delta.reasoning_content };
       if (delta?.content) yield { content: delta.content };
       if (event.usage) yield { usage: event.usage };
       if (event.timings) yield { timings: event.timings };

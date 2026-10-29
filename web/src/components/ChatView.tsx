@@ -6,9 +6,11 @@ import {
   ArrowDown,
   AudioLines,
   Check,
+  ChevronRight,
   Copy,
   Download,
   FileText,
+  Lightbulb,
   Monitor,
   Music,
   Pencil,
@@ -313,15 +315,42 @@ function UserMessage({ chat, message, busy, onZoom }: { chat: Chat; message: Mes
   );
 }
 
+/** The model's thinking: a live peek while it thinks, then a line you can open. */
+function Thoughts({ text, ms, active }: { text: string; ms?: number; active: boolean }) {
+  const [open, setOpen] = useState(false);
+  const peek = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (active && peek.current) peek.current.scrollTop = peek.current.scrollHeight;
+  }, [text, active]);
+  return (
+    <div className={cx("thoughts", open && "open", active && "active")}>
+      <button className="thoughts-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <Lightbulb size={14} />
+        <span className={active ? "shimmer" : undefined}>{active ? "Thinking" : ms ? `Thought for ${duration(ms)}` : "Thoughts"}</span>
+        <ChevronRight size={14} className="thoughts-chev" />
+      </button>
+      {(open || active) && (
+        <div ref={peek} className={cx("thoughts-body", !open && "peek")}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: Message; last: boolean; busy: boolean }) {
   const liveText = useStore((s) => s.live[message.id]);
+  const liveThought = useStore((s) => s.thoughts[message.id]);
   const speaking = useStore((s) => s.speaking === message.id);
   const [copied, setCopied] = useState(false);
   const streaming = message.status === "streaming";
   const text = streaming ? (liveText ?? message.content) : message.content;
   const steps = message.steps ?? [];
   const waitingOnStep = steps.some((s) => ["pending", "checking", "approval", "running"].includes(s.status));
+  const thought = streaming ? (liveThought ?? message.thinking) : message.thinking;
   const thinking = streaming && !text && !waitingOnStep;
+  // Still thinking: no new answer text since the latest thought arrived.
+  const thinkingNow = thinking && Boolean(liveThought) && liveThought !== message.thinking;
 
   return (
     <div className={cx("msg assistant", streaming && "streaming")}>
@@ -330,8 +359,9 @@ function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: 
           <AudioLines size={12} /> Voice
         </div>
       )}
+      {thought && <Thoughts text={thought} ms={message.thinkingMs} active={thinkingNow} />}
       <Steps steps={steps} working={streaming} ms={message.stats?.ms} />
-      {thinking && (
+      {thinking && !thinkingNow && (
         <div className="thinking">
           <span className="thinking-dot" />
           <span className="shimmer">{steps.length ? "Reading the results" : "Thinking"}</span>

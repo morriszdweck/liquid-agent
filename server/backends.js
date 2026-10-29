@@ -4,13 +4,15 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DATA, DIRS, ROOT, bus, bytesText, run, settings, sleep } from "./core.js";
+import os from "node:os";
+import { DATA, DIRS, QUANTS, ROOT, bus, bytesText, load, run, save, settings, sleep } from "./core.js";
 
 export const PARTS = {
   engine: {
     title: "AI engine",
     detail: "Runs the models on your Mac (latest llama.cpp).",
     size: "about 30 MB",
+    bytes: 0.03e9,
   },
   small: {
     title: "Everyday brain",
@@ -28,29 +30,34 @@ export const PARTS = {
     title: "Safety helper",
     detail: "Auto 200M (INT4). Checks each action is safe before it runs.",
     size: "about 900 MB",
+    bytes: 0.9e9,
     port: 8766,
   },
   browser: {
     title: "Web helper",
     detail: "Betterwright. Lets the agent click around websites for you.",
     size: "about 250 MB",
+    bytes: 0.25e9,
     port: 8767,
   },
 };
 export const ORDER = ["engine", "small", "omni", "guardian", "browser"];
 
-const FILES = {
-  smallRepo: "LiquidAI/LFM3-1.7B-GGUF",
-  small: "LFM3-1.7B-Q4_K_M.gguf",
-  omniRepo: "LiquidAI/LFM3-Omni-2B-GGUF",
-  omni: "LFM3-Omni-2B-Q4_K_M.gguf",
-  omniProjector: "mmproj-LFM3-Omni-2B-Q8_0.gguf",
+// Each model comes in several sizes (quants); settings pick which one is used.
+const GGUF = {
+  small: { repo: "LiquidAI/LFM3-1.7B-GGUF", prefix: "LFM3-1.7B-" },
+  omni: { repo: "LiquidAI/LFM3-Omni-2B-GGUF", prefix: "LFM3-Omni-2B-" },
 };
+const OMNI_PROJECTOR = { file: "mmproj-LFM3-Omni-2B-Q8_0.gguf", bytes: 0.54e9 };
+const quantOf = (id) => QUANTS[id].find((q) => q.id === settings[`${id}Quant`]) ?? QUANTS[id][1];
+const weightsFile = (id) => `${GGUF[id].prefix}${quantOf(id).id}.gguf`;
 
 const ARCH = process.arch === "arm64" ? "arm64" : "x64";
 const ENGINE_ASSET = process.platform === "darwin" ? `bin-macos-${ARCH}.tar.gz` : `bin-ubuntu-${ARCH}.tar.gz`;
 
 const model = (name) => path.join(DIRS.models, name);
+const weights = (id) => model(weightsFile(id));
+const gb = (bytes) => `${(bytes / 1e9).toFixed(1)} GB`;
 const marker = (dir) => path.join(dir, ".ready");
 
 /** Finds the llama-server inside the app's own engine folder. */
@@ -111,23 +118,74 @@ class Backends {
   procs = {};
   busy = false;
   controller = null;
+  /** Parts asked for while another download was running. They go next. */
+  queued = new Set();
+  /** Parts the current download run still has to get to. */
+  plan = new Set();
+  current = null;
+  /** Parts between "start" and having a process, so two starts can't race. */
+  launching = new Set();
+  /** Approve for Me was picked before Auto 200M was ready; it turns on once Auto 200M runs. */
+  guardianWanted = false;
+  /** Called with a part's id each time it becomes ready. */
+  readyHooks = [];
 
   constructor() {
     this.refresh();
     for (const id of ORDER) if (this.states[id].status === "installing") this.states[id] = { status: "missing" };
+    const saved = load("downloads.json", {});
+    this.unfinished = Array.isArray(saved.pending) ? saved.pending.filter((id) => ORDER.includes(id)) : [];
+    this.guardianWanted = saved.approveForMe === true;
+  }
+
+  /** Downloads and the Approve for Me wish survive a restart; they pick up where they stopped. */
+  remember() {
+    const pending = [...new Set([this.current, ...this.plan, ...this.queued].filter(Boolean))];
+    save("downloads.json", { pending, approveForMe: this.guardianWanted });
+  }
+
+  /** Called once at startup: continues downloads a restart interrupted. */
+  resume() {
+    if (this.unfinished.length) this.install(this.unfinished);
+    this.unfinished = [];
+  }
+
+  wantGuardian(on) {
+    this.guardianWanted = on;
+    this.remember();
+    this.emit();
   }
 
   snapshot() {
-    return ORDER.map((id) => ({ id, ...PARTS[id], ...this.states[id] }));
+    return ORDER.map((id) => {
+      const part = { id, ...PARTS[id], ...this.states[id], queued: this.queued.has(id) || (this.plan.has(id) && this.states[id]?.status === "missing") };
+      if (!GGUF[id]) return part;
+      const extra = id === "omni" ? OMNI_PROJECTOR.bytes : 0;
+      const quant = quantOf(id);
+      return {
+        ...part,
+        size: gb(quant.bytes + extra),
+        bytes: quant.bytes + extra,
+        quant: quant.id,
+        quants: QUANTS[id].map((q) => ({ ...q, size: gb(q.bytes + extra), onDisk: fs.existsSync(model(`${GGUF[id].prefix}${q.id}.gguf`)) })),
+      };
+    });
+  }
+
+  /** What the setup screen needs to suggest a size: this Mac's memory. */
+  get machine() {
+    return { memoryGB: Math.round(os.totalmem() / 2 ** 30) };
   }
 
   emit() {
-    bus.emit("parts", { parts: this.snapshot(), busy: this.busy });
+    bus.emit("parts", { parts: this.snapshot(), busy: this.busy, guardianWanted: this.guardianWanted });
   }
 
   set(id, state) {
+    const was = this.states[id]?.status;
     this.states[id] = state;
     this.emit();
+    if (state.status === "running" && was !== "running") for (const hook of this.readyHooks) hook(id);
   }
 
   onDisk(id) {
@@ -135,9 +193,9 @@ class Backends {
       case "engine":
         return findEngine() !== null;
       case "small":
-        return fs.existsSync(model(FILES.small));
+        return fs.existsSync(weights("small"));
       case "omni":
-        return fs.existsSync(model(FILES.omni)) && fs.existsSync(model(FILES.omniProjector));
+        return fs.existsSync(weights("omni")) && fs.existsSync(model(OMNI_PROJECTOR.file));
       case "guardian":
         return fs.existsSync(marker(DIRS.guardian));
       case "browser":
@@ -150,8 +208,10 @@ class Backends {
     return this.onDisk(id);
   }
 
+  /** Ready to answer. A model keeps answering with its old size while a new size downloads. */
   running(id) {
-    return this.states[id]?.status === "running";
+    const status = this.states[id]?.status;
+    return status === "running" || (status === "installing" && Boolean(this.procs[id]) && this.states[id].live === true);
   }
 
   get ready() {
@@ -169,7 +229,12 @@ class Backends {
   // ---- Install ----
 
   async install(ids) {
-    if (this.busy) return;
+    if (this.busy) {
+      for (const id of ids) if (ORDER.includes(id)) this.queued.add(id);
+      this.remember();
+      this.emit();
+      return;
+    }
     const queue = ORDER.filter((id) => ids.includes(id));
     if ((queue.includes("small") || queue.includes("omni")) && !this.installed("engine") && !queue.includes("engine")) {
       queue.unshift("engine");
@@ -177,41 +242,59 @@ class Backends {
     this.busy = true;
     this.controller = new AbortController();
     const { signal } = this.controller;
+    this.plan = new Set(queue);
+    this.remember();
     this.emit();
     try {
       for (const id of queue) {
+        this.plan.delete(id);
+        this.current = id;
+        this.remember();
         if (this.installed(id)) {
           if (!this.running(id)) await this.start(id);
           continue;
         }
         try {
-          this.set(id, { status: "installing", text: "Starting…" });
+          this.set(id, { status: "installing", text: "Starting…", live: this.running(id) });
           await this.installPart(id, signal);
+          // A new size replaces the one that was running.
+          if (this.procs[id]) this.stop(id);
           this.set(id, { status: "installed" });
+          this.pruneQuants(id);
           await this.start(id);
         } catch (e) {
+          const live = this.states[id]?.live && this.procs[id];
           if (signal.aborted) {
-            this.set(id, { status: this.onDisk(id) ? "installed" : "missing" });
+            this.set(id, live ? { status: "running" } : { status: this.onDisk(id) ? "installed" : "missing" });
             return;
           }
-          this.set(id, { status: "failed", error: friendly(e) });
+          this.set(id, live ? { status: "running", error: friendly(e) } : { status: "failed", error: friendly(e) });
         }
       }
     } finally {
       this.busy = false;
       this.controller = null;
+      this.plan.clear();
+      this.current = null;
+      const next = signal.aborted ? [] : [...this.queued];
+      this.queued.clear();
+      this.remember();
       this.emit();
+      if (next.length) this.install(next);
     }
   }
 
   cancel() {
+    this.queued.clear();
     this.controller?.abort();
   }
 
   progress(id, label) {
+    const live = this.states[id]?.live === true;
     return (done, total) =>
       this.set(id, {
         status: "installing",
+        live,
         text: total ? `${label} ${bytesText(done)} of ${bytesText(total)}` : `${label} ${bytesText(done)}`,
         fraction: total ? done / total : undefined,
       });
@@ -223,16 +306,18 @@ class Backends {
       case "engine":
         return this.installEngine(signal);
       case "small":
-        return download(hf(FILES.smallRepo, FILES.small), model(FILES.small), {
+        return download(hf(GGUF.small.repo, weightsFile("small")), weights("small"), {
           signal,
           onProgress: this.progress(id, "Downloading"),
         });
       case "omni":
-        await download(hf(FILES.omniRepo, FILES.omniProjector), model(FILES.omniProjector), {
-          signal,
-          onProgress: this.progress(id, "Downloading the ears and eyes"),
-        });
-        return download(hf(FILES.omniRepo, FILES.omni), model(FILES.omni), {
+        if (!fs.existsSync(model(OMNI_PROJECTOR.file))) {
+          await download(hf(GGUF.omni.repo, OMNI_PROJECTOR.file), model(OMNI_PROJECTOR.file), {
+            signal,
+            onProgress: this.progress(id, "Downloading the eyes and ears"),
+          });
+        }
+        return download(hf(GGUF.omni.repo, weightsFile("omni")), weights("omni"), {
           signal,
           onProgress: this.progress(id, "Downloading the brain"),
         });
@@ -308,7 +393,8 @@ class Backends {
 
   get nodeEnv() {
     const bin = path.dirname(process.execPath);
-    return { PATH: `${bin}:${process.env.PATH}`, npm_config_cache: path.join(DIRS.tools, "npm-cache") };
+    // Betterwright keeps its browser and profile with the rest of our files, so Remove removes them.
+    return { PATH: `${bin}:${process.env.PATH}`, npm_config_cache: path.join(DIRS.tools, "npm-cache"), BETTERWRIGHT_HOME: path.join(DIRS.bridge, "home") };
   }
 
   async installBrowser(signal) {
@@ -330,11 +416,11 @@ class Backends {
         fs.rmSync(DIRS.engine, { recursive: true, force: true });
         break;
       case "small":
-        fs.rmSync(model(FILES.small), { force: true });
+        this.pruneQuants(id, { all: true });
         break;
       case "omni":
-        fs.rmSync(model(FILES.omni), { force: true });
-        fs.rmSync(model(FILES.omniProjector), { force: true });
+        this.pruneQuants(id, { all: true });
+        fs.rmSync(model(OMNI_PROJECTOR.file), { force: true });
         break;
       case "guardian":
         fs.rmSync(DIRS.guardian, { recursive: true, force: true });
@@ -346,6 +432,35 @@ class Backends {
         break;
     }
     this.set(id, { status: "missing" });
+  }
+
+  /** Deletes this model's other sizes (or all of them), including half-finished downloads. */
+  pruneQuants(id, { all = false } = {}) {
+    if (!GGUF[id]) return;
+    const keep = all ? null : weightsFile(id);
+    let names = [];
+    try {
+      names = fs.readdirSync(DIRS.models);
+    } catch {}
+    for (const name of names) {
+      if (name.startsWith(GGUF[id].prefix) && name !== keep && name !== `${keep}.part`) fs.rmSync(model(name), { force: true });
+    }
+  }
+
+  /** Called after the size setting changes: fetches the new size if this model was set up. */
+  switchQuant(id) {
+    if (!GGUF[id]) return;
+    const hadOne = fs.readdirSync(DIRS.models).some((name) => name.startsWith(GGUF[id].prefix) && name.endsWith(".gguf"));
+    this.refresh();
+    this.emit();
+    if (hadOne && !this.installed(id)) this.install([id]);
+    else if (this.installed(id)) {
+      this.pruneQuants(id);
+      if (this.procs[id]) {
+        this.stop(id);
+        this.start(id);
+      }
+    }
   }
 
   // ---- Run ----
@@ -361,10 +476,11 @@ class Backends {
       case "omni": {
         const server = findEngine();
         if (!server) return null;
-        // Two slots of 8K each: Omni can hold a voice call and transcribe at the same time.
-        const args = ["--host", "127.0.0.1", "--port", port, "-c", "16384", "-np", "2", "--jinja", "-ngl", "99", "--reasoning", "off"];
-        if (id === "small") args.push("-m", model(FILES.small), "--alias", "LFM3-1.7B");
-        else args.push("-m", model(FILES.omni), "--mmproj", model(FILES.omniProjector), "--alias", "LFM3-Omni-2B");
+        // Two slots of 16K each: Omni can hold a voice call and transcribe at the same time,
+        // with room for thinking. Each request turns thinking on or off itself.
+        const args = ["--host", "127.0.0.1", "--port", port, "-c", "32768", "-np", "2", "--jinja", "-ngl", "99", "--reasoning", "auto"];
+        if (id === "small") args.push("-m", weights("small"), "--alias", "LFM3-1.7B");
+        else args.push("-m", weights("omni"), "--mmproj", model(OMNI_PROJECTOR.file), "--alias", "LFM3-Omni-2B");
         return { cmd: server, args };
       }
       case "guardian":
@@ -386,11 +502,13 @@ class Backends {
   }
 
   async start(id) {
-    if (id === "engine" || this.procs[id] || !this.installed(id)) return;
+    if (id === "engine" || this.procs[id] || this.launching.has(id) || !this.installed(id)) return;
     const spec = this.command(id);
     if (!spec) return;
     const port = PARTS[id].port;
-    if (!(await this.freePort(port))) {
+    this.launching.add(id);
+    const free = await this.freePort(port).finally(() => this.launching.delete(id));
+    if (!free) {
       this.set(id, { status: "failed", error: `Something else is using port ${port}. Quit it, then click Try again.` });
       return;
     }

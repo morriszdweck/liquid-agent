@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   FileText,
+  Lightbulb,
   Mic,
   Monitor,
   Music,
@@ -22,7 +23,7 @@ import {
 import { api, fileURL, transcribe, upload } from "../api";
 import { Mic as Microphone, wav } from "../audio/capture";
 import { errorToast, go, part, toast, useStore } from "../store";
-import type { ApprovalMode, Attachment, Chat } from "../types";
+import type { ApprovalMode, Attachment, Chat, Part } from "../types";
 import { captureScreen, cx, prepareImage } from "../util";
 import { Menu, Spinner } from "./ui";
 
@@ -34,6 +35,14 @@ export const MODES: { value: ApprovalMode; label: string; detail: string; icon: 
   { value: "fullAuto", label: "Full Auto", detail: "Runs everything. Risky commands still ask.", icon: <Zap size={15} /> },
 ];
 
+/** Approve for Me needs Auto 200M. Says what picking it will do when Auto 200M isn't ready yet. */
+export function modeNote(guardian: Part | undefined, wanted: boolean) {
+  if (guardian?.status === "running") return null;
+  if (wanted) return guardian?.status === "failed" ? "Auto 200M didn't finish. Pick this again to retry." : "Getting Auto 200M ready. It switches on by itself.";
+  if (guardian?.status === "installed" || guardian?.status === "starting") return "Starts Auto 200M first.";
+  return `Downloads Auto 200M first (${guardian?.size ?? "about 900 MB"}).`;
+}
+
 const kindOf = (file: File): Attachment["kind"] =>
   file.type.startsWith("image/") ? "image" : file.type.startsWith("audio/") ? "audio" : /^text\/|json|xml|javascript/.test(file.type) ? "text" : "other";
 
@@ -42,7 +51,8 @@ export function fill(text: string) {
 }
 
 export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean }) {
-  const { running, settings, parts } = useStore();
+  const { running, settings, parts, guardianWanted } = useStore();
+  const guardian = parts.find((p) => p.id === "guardian");
   // The draft survives a reload, such as the one after the server restarts.
   const draftKey = `la:draft:${chat?.id ?? "new"}`;
   const [text, setText] = useState(() => {
@@ -246,7 +256,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
     }
   }
 
-  const mode = MODES.find((m) => m.value === settings?.approvalMode) ?? MODES[1];
+  const mode = MODES.find((m) => m.value === settings?.approvalMode) ?? MODES[0];
   const needsOmni = files.some((f) => f.kind === "image" || f.kind === "audio");
   const lastModel = chat?.messages.filter((m) => m.role === "assistant").at(-1)?.model;
   const modelHint = needsOmni ? "LFM3 Omni 2B" : lastModel === "omni" && chat?.messages.slice(-4).some((m) => m.attachments?.some((a) => a.kind !== "text")) ? "LFM3 Omni 2B" : "LFM3 1.7B";
@@ -383,8 +393,8 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
           side="top"
           width={300}
           trigger={(open, toggle) => (
-            <button className={cx("foot-btn", open && "active")} onClick={toggle}>
-              {mode.icon}
+            <button className={cx("foot-btn", open && "active")} onClick={toggle} title={guardianWanted ? "Approve for Me turns on once Auto 200M is ready" : undefined}>
+              {guardianWanted && guardian?.status !== "failed" ? <Spinner size={13} /> : mode.icon}
               {mode.label}
               <ChevronDown size={13} />
             </button>
@@ -392,7 +402,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
           items={MODES.map((m) => ({
             label: m.label,
             icon: m.icon,
-            detail: m.detail,
+            detail: (m.value === "approveForMe" && modeNote(guardian, guardianWanted)) || m.detail,
             checked: m.value === mode.value,
             onClick: () => api("PATCH", "/api/settings", { approvalMode: m.value }).catch(errorToast),
           }))}
@@ -400,6 +410,15 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
         <span className="foot-model" title="Liquid Agent picks the model for you">
           Auto · {modelHint}
         </span>
+        <button
+          className={cx("foot-btn", settings?.reasoning && "on")}
+          aria-pressed={Boolean(settings?.reasoning)}
+          title={settings?.reasoning ? "LFM3 1.7B thinks before answering: slower, better answers. Click to turn off." : "Answers right away. Click to have LFM3 1.7B think first."}
+          onClick={() => api("PATCH", "/api/settings", { reasoning: !settings?.reasoning }).catch(errorToast)}
+        >
+          <Lightbulb size={14} />
+          Think
+        </button>
       </div>
     </div>
   );

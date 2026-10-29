@@ -19,9 +19,13 @@ type State = {
   chats: Chat[];
   running: string[];
   live: Record<string, string>;
+  /** What each answer is thinking right now, while it streams. */
+  thoughts: Record<string, string>;
   settings: Settings | null;
   parts: Part[];
   busy: boolean;
+  guardianWanted: boolean;
+  machine: { memoryGB: number };
   memory: string[];
   ideas: { at: number; items: Idea[] };
   routines: Routine[];
@@ -41,9 +45,12 @@ export const useStore = create<State>(() => ({
   chats: [],
   running: [],
   live: {},
+  thoughts: {},
   settings: null,
   parts: [],
   busy: false,
+  guardianWanted: false,
+  machine: { memoryGB: 0 },
   memory: [],
   ideas: { at: 0, items: [] },
   routines: [],
@@ -118,21 +125,23 @@ function upsertChat(chat: Chat) {
   const before = get().chats.find((c) => c.id === chat.id);
   const chats = get().chats.filter((c) => c.id !== chat.id);
   const live = { ...get().live };
+  const thoughts = { ...get().thoughts };
   for (const m of chat.messages) {
     // A new step means the streamed text so far became that step's note.
     const old = before?.messages.find((x) => x.id === m.id);
     if (m.status !== "streaming" || (old && (old.steps?.length ?? 0) !== (m.steps?.length ?? 0))) delete live[m.id];
+    if (m.status !== "streaming") delete thoughts[m.id];
   }
-  set({ chats: [chat, ...chats].sort((a, b) => b.updatedAt - a.updatedAt), live });
+  set({ chats: [chat, ...chats].sort((a, b) => b.updatedAt - a.updatedAt), live, thoughts });
 }
 
 type Event =
   | ({ type: "hello" } & Snapshot)
   | { type: "chat"; chat: Chat }
   | { type: "chat.deleted"; id: string }
-  | { type: "delta"; chatId: string; messageId: string; text: string }
+  | { type: "delta"; chatId: string; messageId: string; text: string; thinking?: string }
   | { type: "running"; running: string[] }
-  | { type: "parts"; parts: Part[]; busy: boolean }
+  | { type: "parts"; parts: Part[]; busy: boolean; guardianWanted: boolean }
   | { type: "settings"; settings: Settings }
   | { type: "memory"; facts: string[] }
   | { type: "ideas"; ideas: { at: number; items: Idea[] } }
@@ -156,13 +165,13 @@ function onEvent(e: Event) {
       set({ chats: get().chats.filter((c) => c.id !== e.id) });
       break;
     case "delta":
-      set({ live: { ...get().live, [e.messageId]: e.text } });
+      set({ live: { ...get().live, [e.messageId]: e.text }, ...(e.thinking ? { thoughts: { ...get().thoughts, [e.messageId]: e.thinking } } : {}) });
       break;
     case "running":
       set({ running: e.running });
       break;
     case "parts":
-      set({ parts: e.parts, busy: e.busy });
+      set({ parts: e.parts, busy: e.busy, guardianWanted: e.guardianWanted });
       break;
     case "settings":
       set({ settings: e.settings });

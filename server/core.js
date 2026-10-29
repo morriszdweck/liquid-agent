@@ -81,7 +81,7 @@ export const PERSONALITIES = {
 export const DEFAULTS = {
   userName: "",
   personality: "friendly",
-  approvalMode: "approveForMe", // askAlways | approveForMe | fullAuto
+  approvalMode: "askAlways", // askAlways | approveForMe (needs Auto 200M) | fullAuto
   theme: "system",
   voice: "female",
   speakReplies: false,
@@ -91,6 +91,10 @@ export const DEFAULTS = {
   toolOutputLimit: 1200,
   maxSteps: 8,
   temperature: 0.3,
+  /** LFM3 1.7B thinks before answering. Slower, but much better answers. Omni 2B can't think. */
+  reasoning: true,
+  smallQuant: "Q4_K_M",
+  omniQuant: "Q4_K_M",
   smallURL: "http://127.0.0.1:8180/v1",
   omniURL: "http://127.0.0.1:8181/v1",
   guardianURL: "http://127.0.0.1:8766",
@@ -98,7 +102,27 @@ export const DEFAULTS = {
 };
 
 const URL_KEYS = new Set(["smallURL", "omniURL", "guardianURL", "browserURL"]);
+/** Download sizes offered for each model, smallest first. Sizes are bytes on Hugging Face. */
+export const QUANTS = {
+  small: [
+    { id: "QAD-Q4_0", label: "Smallest", bytes: 1.05e9, note: "Trained to stay sharp at 4-bit" },
+    { id: "Q4_K_M", label: "Balanced", bytes: 1.1e9, note: "Recommended" },
+    { id: "Q5_K_M", label: "Sharper", bytes: 1.26e9 },
+    { id: "Q6_K", label: "Sharper still", bytes: 1.43e9 },
+    { id: "Q8_0", label: "Best", bytes: 1.85e9, note: "Near full quality" },
+    { id: "F16", label: "Full quality", bytes: 3.47e9, note: "Slowest, needs the most memory" },
+  ],
+  omni: [
+    { id: "Q4_0", label: "Smallest", bytes: 1.05e9 },
+    { id: "Q4_K_M", label: "Balanced", bytes: 1.1e9, note: "Recommended" },
+    { id: "Q8_0", label: "Best", bytes: 1.85e9, note: "Near full quality" },
+    { id: "F16", label: "Full quality", bytes: 3.47e9, note: "Slowest, needs the most memory" },
+  ],
+};
+
 const CHOICES = {
+  smallQuant: QUANTS.small.map((q) => q.id),
+  omniQuant: QUANTS.omni.map((q) => q.id),
   personality: Object.keys(PERSONALITIES),
   approvalMode: ["askAlways", "approveForMe", "fullAuto"],
   theme: ["system", "light", "dark"],

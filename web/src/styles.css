@@ -1403,6 +1403,54 @@ input[type="range"] {
   font-size: 12px;
 }
 
+.thoughts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.thoughts-head {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 8px 0 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg-3);
+  font-size: 13.5px;
+}
+.thoughts-head:hover {
+  background: var(--hover);
+  color: var(--fg-2);
+}
+.thoughts-chev {
+  transition: transform 0.15s ease;
+}
+.thoughts.open .thoughts-chev {
+  transform: rotate(90deg);
+}
+.thoughts-body {
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--border);
+  color: var(--fg-3);
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.thoughts-body.peek {
+  max-height: 4.8em;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent, #000 40%);
+}
+.thoughts.open .thoughts-body {
+  max-height: 420px;
+  overflow: auto;
+}
 .thinking {
   display: flex;
   align-items: center;
@@ -1723,7 +1771,6 @@ input[type="range"] {
 .composer-foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   padding: 6px 6px 0;
 }
@@ -1745,7 +1792,14 @@ input[type="range"] {
   background: var(--hover);
   color: var(--fg);
 }
+.foot-btn.on {
+  color: var(--accent);
+}
+.foot-btn.on:hover {
+  background: var(--accent-soft);
+}
 .foot-model {
+  margin-left: auto;
   color: var(--fg-3);
   font-size: 12px;
 }
@@ -2756,6 +2810,85 @@ input[type="range"] {
 .plan-size {
   color: var(--fg-3);
   font-size: 13px;
+}
+.setup-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.parts.compact .part-detail {
+  display: none;
+}
+.size-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+.size-pick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 550;
+}
+.size-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.size-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  text-align: left;
+}
+.size-option:hover {
+  border-color: var(--border-strong);
+}
+.size-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.size-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.size-label .pill {
+  font-size: 10.5px;
+}
+.size-detail {
+  color: var(--fg-3);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.part-size {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--fg-3);
+  font-size: 12.5px;
+}
+.part-size select {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12.5px;
+  max-width: 100%;
+}
+.mode-need {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.35;
 }
 .plan-card ul {
   margin: 6px 0 0;

@@ -89,6 +89,8 @@ function snapshot() {
     settings,
     parts: backends.snapshot(),
     busy: backends.busy,
+    guardianWanted: backends.guardianWanted,
+    machine: backends.machine,
     memory: memory.facts,
     ideas: memory.ideas,
     routines: routineStore.list,
@@ -154,7 +156,28 @@ route("POST", "/api/speak", async (req, _, res) => {
 });
 
 route("GET", "/api/settings", () => settings);
-route("PATCH", "/api/settings", async (req) => updateSettings(await json(req)));
+// Approve for Me needs Auto 200M. Choosing it early fetches Auto 200M and turns the mode on once it's ready.
+route("PATCH", "/api/settings", async (req) => {
+  const patch = (await json(req)) ?? {};
+  const before = { small: settings.smallQuant, omni: settings.omniQuant };
+  const resizing = ["small", "omni"].some((id) => `${id}Quant` in patch && patch[`${id}Quant`] !== before[id]);
+  if (resizing && backends.busy) throw new HttpError(409, "Wait for the current download to finish, then pick a size.");
+  if (patch.approvalMode === "approveForMe" && !backends.running("guardian")) {
+    delete patch.approvalMode;
+    backends.wantGuardian(true);
+    backends.install(["guardian"]);
+  } else if ("approvalMode" in patch && backends.guardianWanted) {
+    backends.wantGuardian(false);
+  }
+  const next = updateSettings(patch);
+  for (const id of ["small", "omni"]) if (settings[`${id}Quant`] !== before[id]) backends.switchQuant(id);
+  return next;
+});
+backends.readyHooks.push((id) => {
+  if (id !== "guardian" || !backends.guardianWanted) return;
+  backends.wantGuardian(false);
+  updateSettings({ approvalMode: "approveForMe" });
+});
 
 route("POST", "/api/memory", async (req) => {
   const { fact } = await json(req);
@@ -194,7 +217,10 @@ route("POST", "/api/parts/install", async (req) => {
   backends.install(Array.isArray(ids) ? ids : []);
 });
 route("POST", "/api/parts/cancel", () => backends.cancel());
-route("POST", "/api/parts/(\\w+)/remove", (_, [id]) => backends.remove(id));
+route("POST", "/api/parts/(\\w+)/remove", (_, [id]) => {
+  backends.remove(id);
+  if (id === "guardian" && settings.approvalMode === "approveForMe") updateSettings({ approvalMode: "askAlways" });
+});
 route("POST", "/api/parts/(\\w+)/start", (_, [id]) => {
   backends.start(id);
 });
@@ -314,7 +340,11 @@ server.listen(PORT, HOST, () => {
   console.log(`Liquid Agent is running at http://127.0.0.1:${PORT}`);
   console.log(`Data: ${DATA}`);
   if (process.argv.includes("--open")) openBrowser();
-  backends.startAll().catch(() => {});
+  if (settings.approvalMode === "approveForMe" && !backends.installed("guardian")) updateSettings({ approvalMode: "askAlways" });
+  backends
+    .startAll()
+    .catch(() => {})
+    .finally(() => backends.resume());
   memory.tidy();
 });
 
