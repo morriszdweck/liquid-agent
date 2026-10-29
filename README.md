@@ -1,85 +1,65 @@
 # Liquid Agent
 
-A private AI agent for your Mac, built for **LFM3 1.7B** and **LFM3 Omni 2B**. It's as easy to use as ChatGPT, it can do things on your Mac for you, and it runs entirely on your computer.
+A private AI agent for your Mac that runs **LFM3 1.7B** and **LFM3 Omni 2B** entirely on your computer, with a clean web interface in your browser.
 
-Inspired by Hermes, Muse and Grok.
+- **Chat** with full Markdown: tables, code with highlighting and copy buttons, math, task lists.
+- **Does things on your Mac**: runs commands, reads and writes files, searches and reads the web, opens apps and links, sets reminders, uses the clipboard, and clicks around websites with [Betterwright](https://www.npmjs.com/package/betterwright).
+- **Voice chat** with LFM3 Omni 2B: it listens, thinks and talks back in one model. Talk over it to interrupt.
+- **Omni where it matters**: dictation, reading answers aloud, pictures, audio and your screen all go through LFM3 Omni 2B. Everyday text and documents go to LFM3 1.7B. The app picks the model for you.
+- **Three safety modes**: *Ask for Approval*, *Approve for Me* (the [Auto 200M INT4](https://huggingface.co/ProCreations/auto-200m-2-int4) classifier approves safe actions and asks you about the rest) and *Full Auto*. Commands that could wipe data always ask.
+- **Memory and For You**: it learns small facts about you, uses only the relevant ones (to keep prompts short) and suggests ideas based on them.
+- **Routines** you can run with one click or on a schedule, and an **Activity** log of every action and who approved it.
+- **One-click downloads** inside the app. No model picker, no terminal.
 
-## So easy anyone can use it
+Everything stays on your Mac. The only network traffic is the one-time downloads and web searches you ask for.
 
-1. Open Liquid Agent.
-2. Click **Set up everything**.
-3. Start chatting.
+## Start
 
-There's no Terminal and no picking models. The app downloads what it needs, starts it, and picks the right brain for each request.
+Double-click **Liquid Agent.command**. The first time, it gets what it needs (Node.js if you don't have it, then the app), then opens your browser at <http://127.0.0.1:8170>. The welcome screen downloads the models with one button.
 
-## Features
-
-- **Chat.** ChatGPT-style chat with streaming replies, search, rename and export (Markdown). Each reply has copy, read-aloud and try-again buttons.
-- **Voice chat.** A full-screen, hands-free conversation: you talk, it answers out loud, then listens again. Speech recognition runs on-device.
-- **Look at my screen.** One click takes a screenshot and Omni explains or helps with what's on it.
-- **Attachments.** Drag in pictures or files. Pictures go to Omni; text files are read into the chat.
-- **For You.** Personalized idea cards based on what the agent remembers about you.
-- **Memory.** The agent remembers useful facts about you. You can see, add and delete them.
-- **Routines.** One-click tasks such as a morning briefing, tidying Downloads, today's news or a Mac health check. Any routine can run every day at a set time.
-- **Activity.** A log of every action the agent took and who approved it.
-- **Menu bar quick ask.** Ask a question from the menu bar without opening the window.
-- **Notifications.** You get a notification when a task finishes or the agent needs your OK. Reminders can be set by voice or text.
-- **Personality.** Choose Friendly, Concise, Playful or Professional. The agent can also greet you by name.
-- **Tools.** Shell, files, open apps and websites, web search, a Betterwright browser (go to a page, read, click, type), memory, clipboard and reminders.
-- **Automatic model choice.** LFM3 Omni 2B handles pictures and the screen. LFM3 1.7B handles everything else, because it's faster.
-- **Three approval modes.**
-  - **Ask for Approval:** asks before every action.
-  - **Approve for Me:** [Auto 200M INT4](https://huggingface.co/ProCreations/auto-200m-2-int4) runs anything it judges safe and asks you about the rest.
-  - **Full Auto:** runs everything, but risky shell commands still ask you.
-- **Token efficient.**
-  - The system prompt is about 250 tokens.
-  - History is fitted to a token budget, newest first, and older tool results are trimmed.
-  - Only memory facts relevant to the request are included, and only the newest image is sent.
-  - Unavailable tools are left out of the prompt.
-  - Browser pages come back as compact text plus a list of buttons and links.
-- **Local only.** All servers listen on 127.0.0.1, and the app refuses any endpoint that isn't on your Mac.
-
-## What gets downloaded (once)
-
-| Part | What it is | Size | Source |
-|---|---|---|---|
-| AI engine | latest llama.cpp (needed for the `lfm3` architecture) | ~30 MB | GitHub |
-| Everyday brain | `LiquidAI/LFM3-1.7B-GGUF` Q4_K_M | 1.1 GB | Hugging Face |
-| Eyes and ears | `LiquidAI/LFM3-Omni-2B-GGUF` Q4_K_M + mmproj Q8_0 | 1.6 GB | Hugging Face |
-| Safety helper | `ProCreations/auto-200m-2-int4` + a private Python (via uv) | ~900 MB | Hugging Face, GitHub |
-| Web helper | Betterwright + its browser + a private Node.js | ~250 MB | npm, nodejs.org |
-
-Everything is stored in `~/Library/Application Support/LiquidAgent/`. You can remove any part in Settings → Downloads.
-
-## Build from source
-
-You need macOS 14 or later and Swift 5.10 or later (Xcode or the Command Line Tools).
+Or from a terminal:
 
 ```bash
-git clone https://github.com/morriszdweck/liquid-agent && cd liquid-agent
-./scripts/build-app.sh
-open "build/Liquid Agent.app"
+npm ci && npm run build && npm start
 ```
 
-From the terminal, `LiquidAgent --install engine,small,omni,guardian,browser` installs parts without the UI. `scripts/start-backends.sh` is a developer path that runs servers from the repo.
+Requirements: an Apple silicon Mac with macOS 14 or later and about 4 GB of free space for everything (1.1 GB for text chat only).
 
-## Architecture
+## What gets downloaded
+
+| Part | What it is | Size |
+| --- | --- | --- |
+| AI engine | [llama.cpp](https://github.com/ggml-org/llama.cpp) server, latest release | ~30 MB |
+| Everyday brain | LFM3 1.7B (GGUF) | 1.1 GB |
+| Eyes and ears | LFM3 Omni 2B with its audio and vision parts | 1.6 GB |
+| Safety helper | Auto 200M INT4, run with Python through `uv` | ~900 MB |
+| Web helper | Betterwright and its browser | ~250 MB |
+
+Files live in `~/Library/Application Support/LiquidAgent`. Settings → Downloads can remove any part.
+
+## How it works
 
 ```
-Sources/LiquidAgent/
-  AppState.swift      agent loop, auto model routing, approvals, voice, routines, activity
-  Backends.swift      downloads, installs and runs every local part
-  Downloader.swift    file downloads with progress
-  Agent.swift         prompt builder + token-budget packing
-  ToolParser.swift    LFM / pythonic / JSON tool-call parser
-  Tools.swift         tool registry
-  Guardian.swift      Auto 200M client + hard safety rules
-  Browser.swift       Betterwright bridge client
-  Memory.swift        user facts + idea generation
-  Voice.swift         on-device speech in and out
-  Views/              chat, voice, For You, routines, memory, activity, setup, settings
-guardian/server.py    Auto 200M INT4 sidecar (uses the repo's auto_quant.py)
-bridge/server.mjs     Betterwright sidecar
+browser ──HTTP/WebSocket──▶ server/ (Node, 127.0.0.1:8170)
+                              ├─ llama-server  LFM3 1.7B      :8180
+                              ├─ llama-server  LFM3 Omni 2B   :8181  (chat, ASR, TTS, realtime voice)
+                              ├─ guardian/     Auto 200M      :8766
+                              └─ bridge/       Betterwright   :8767
+```
+
+- `server/agent.js` runs the agent loop. LFM3 writes tool calls in its native format; `server/toolparser.js` reads that and the other common forms.
+- `server/prompt.js` keeps prompts small: a short system prompt, only relevant memories, and older tool results trimmed to fit the context budget.
+- `server/voice.js` bridges the browser microphone to Omni's realtime API and runs tools in the middle of a conversation.
+- `web/` is a React app built with Vite into `web/dist`, which the server hosts.
+
+The server only accepts requests from this computer, from its own page, carrying a token that changes every launch.
+
+## Develop
+
+```bash
+npm ci
+npm run dev        # rebuilds the UI and restarts the server on changes
+npm run typecheck
 ```
 
 ## License

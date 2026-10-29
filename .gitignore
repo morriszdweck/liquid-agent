@@ -1,6 +1,5 @@
-.build/
-build/
-.swiftpm/
+node_modules/
+web/dist/
 guardian/.venv/
 bridge/node_modules/
 __pycache__/
