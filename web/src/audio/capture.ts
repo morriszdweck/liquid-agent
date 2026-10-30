@@ -1,4 +1,5 @@
 // Microphone capture: 16-bit PCM frames at a chosen rate, plus a loudness level.
+// Camera capture: a live stream for the preview and JPEG snapshots of it.
 
 export type Frame = { pcm: Int16Array; rms: number };
 
@@ -35,6 +36,37 @@ export class Mic {
     this.ctx = null;
     this.stream = null;
     this.node = null;
+  }
+}
+
+export class Camera {
+  stream: MediaStream | null = null;
+  private video = document.createElement("video");
+  private canvas = document.createElement("canvas");
+
+  async start() {
+    this.stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } });
+    this.video.muted = true;
+    this.video.playsInline = true;
+    this.video.srcObject = this.stream;
+    await this.video.play();
+  }
+
+  /** The current frame as base64 JPEG, at most `max` pixels on its long side. */
+  snapshot(max = 640): string | null {
+    const { videoWidth: w, videoHeight: h } = this.video;
+    if (!this.stream || !w || !h) return null;
+    const scale = Math.min(1, max / Math.max(w, h));
+    this.canvas.width = Math.round(w * scale);
+    this.canvas.height = Math.round(h * scale);
+    this.canvas.getContext("2d")?.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
+    return this.canvas.toDataURL("image/jpeg", 0.75).split(",")[1] || null;
+  }
+
+  stop() {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.video.srcObject = null;
+    this.stream = null;
   }
 }
 

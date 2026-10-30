@@ -463,8 +463,8 @@ class Backends {
 
   /** Tokens the model can hold at once, for sizing an answer. */
   contextTokens(id) {
-    if (id === "small" && this.custom?.meta?.contextLength) return this.custom.meta.contextLength;
-    return 32768;
+    const n = id === "small" && this.custom?.meta?.contextLength;
+    return n ? Math.min(32768, Math.max(512, n)) : 32768;
   }
 
   // ---- Install ----
@@ -815,7 +815,7 @@ class Backends {
         const custom = id === "small" ? this.custom : null;
         const variant = variantOf(custom);
         if (custom && !variant) return null;
-        const context = custom?.meta?.contextLength ? Math.min(32768, Math.max(512, custom.meta.contextLength)) : 32768;
+        const context = this.contextTokens(id);
         // Omni keeps two slots for a voice call and dictation at the same time. A custom
         // text model gets one, so its whole context is available to a chat.
         const slots = custom ? 1 : 2;
@@ -959,10 +959,13 @@ function reasonFromLog(file, port) {
     tail = fs.readFileSync(file, "utf8").slice(-4000).toLowerCase();
   } catch {}
   if (tail.includes("unknown model architecture")) return "The AI engine is too old for this model. Remove the AI engine, then download it again.";
-  if (tail.includes("chat template") || tail.includes("chat_template")) return "This model's GGUF file has no chat template, so it can't answer chat messages. Try another GGUF version of it.";
   if (tail.includes("address already in use") || tail.includes("couldn't bind")) return `Something else is using port ${port}. Quit it, then click Try again.`;
   if (tail.includes("failed to load model") || tail.includes("error loading model")) return "The model file looks damaged. Remove it, then download it again.";
   if (tail.includes("out of memory") || tail.includes("failed to allocate")) return `Your ${DEVICE} ran out of memory. Close some apps, then click Try again.`;
+  // Skip the metadata dump: every GGUF lists a tokenizer.chat_template key there.
+  const errors = tail.split("\n").filter((line) => !line.includes("llama_model_loader: - kv")).join("\n");
+  if (/(failed|error|unable)[^\n]*chat template|chat template[^\n]*(not supported|failed|error|missing)|no chat template/.test(errors))
+    return "This model's GGUF file has no usable chat template, so it can't answer chat messages. Try another GGUF version of it.";
   if (/glibc_[\d.]+' not found/.test(tail)) return "This Linux is too old for the AI engine. It needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later).";
   if (tail.includes("error while loading shared libraries")) return `The AI engine is missing a system library: ${tail.match(/loading shared libraries: ([^:]+)/)?.[1] ?? "see the logs"}.`;
   return "It stopped unexpectedly. Click Try again; details are in the logs folder.";

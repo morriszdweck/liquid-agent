@@ -20,11 +20,11 @@ export async function transcribe(wav, { signal } = {}) {
 }
 
 /** Answers a question about a picture. */
-export async function look(image, mime, question, { signal } = {}) {
+export async function look(image, mime, question, { signal, maxTokens = 600 } = {}) {
   return complete({
     ...omni(),
     signal,
-    maxTokens: 600,
+    maxTokens,
     messages: [
       {
         role: "user",

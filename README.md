@@ -4,9 +4,8 @@ A private AI agent for your Mac or Linux computer that runs **LFM3 1.7B** and **
 
 - **Chat** with full Markdown: tables, code with highlighting and copy buttons, math, task lists.
 - **Does things on your computer**: runs commands, reads and writes files, searches and reads the web, opens apps and links, sets reminders, uses the clipboard, and clicks around websites with [Betterwright](https://www.npmjs.com/package/betterwright).
-- **Voice chat** with LFM3 Omni 2B: it listens, thinks and talks back in one model. Talk over it to interrupt.
-- **Omni where it matters**: dictation, reading answers aloud, pictures, audio and your screen all go through LFM3 Omni 2B. Everyday text and documents go to the Everyday brain (LFM3 1.7B unless you add your own). The app picks the model for you.
-- **Bring your own model**: paste a Hugging Face link in Settings → Downloads and Liquid Agent finds its GGUF files, suggests the size that fits your memory, checks the file and runs it as the Everyday brain.
+- **Voice chat** with LFM3 Omni 2B: it listens, thinks and talks back in one model. Talk over it to interrupt. Turn on the camera and it also sees what you show it.
+- **Omni where it matters**: dictation, reading answers aloud, pictures, audio and your screen all go through LFM3 Omni 2B. Everyday text and documents go to the Everyday brain (LFM3 1.7B). The app picks the model for you.
 - **Thinks first**: the built-in LFM3 1.7B reasons before every answer. The reasoning stays folded away; tap **Thinking for a better answer…** to read it. LFM3 Omni 2B, or a custom model whose template has no thinking mode, answers right away.
 - **Three safety modes**: *Ask for Approval*, *Approve for Me* and *Full Auto*. Approve for Me needs the [Auto 200M INT4](https://huggingface.co/ProCreations/auto-200m-2-int4) classifier, which approves safe actions and asks you about the rest; picking it downloads Auto 200M first. Commands that could wipe data always ask.
 - **Memory and For You**: it learns small facts about you, uses only the relevant ones (to keep prompts short) and suggests ideas based on them.
@@ -60,14 +59,14 @@ Screenshots use `grim` on Wayland (or GNOME's and KDE's own screenshot tools, or
 | Part | What it is | Size |
 | --- | --- | --- |
 | AI engine | [llama.cpp](https://github.com/ggml-org/llama.cpp) server, latest release | ~30 MB |
-| Everyday brain | [LFM3 1.7B](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) (GGUF, QAD-Q4_0 to F16), or any GGUF model you add from Hugging Face | 1.05–3.5 GB |
+| Everyday brain | [LFM3 1.7B](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) (GGUF, QAD-Q4_0 to F16) | 1.05–3.5 GB |
 | Eyes and ears | [LFM3 Omni 2B](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF) (Q4_0 to F16) plus its audio and vision projector | 1.6–4 GB |
 | Safety helper | Auto 200M INT4, run with Python through `uv` | ~900 MB |
 | Web helper | Betterwright and its browser | ~250 MB |
 
 Files live in `~/Library/Application Support/LiquidAgent` on macOS and `~/.local/share/liquid-agent` on Linux. Settings → Downloads switches model sizes (the old size keeps answering until the new one is ready) and removes any part.
 
-**Your own model.** Open Settings → Downloads → Everyday brain → **Use a model from Hugging Face** and paste a link such as `https://huggingface.co/AJ-Gonzalez/LFM3-1.7B-heretic`. Liquid Agent reads the repository's GGUF list, groups split files, picks a size that should fit this computer, checks the GGUF header and chat template, and runs it on the same llama.cpp engine. A `blob` link to one `.gguf` file preselects that file. Public repositories work directly; for a gated or private one, accept its terms on Hugging Face and set `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) before starting Liquid Agent. Only text GGUF models are used here; vision/audio projectors are skipped. Switch back to the built-in LFM3 1.7B at any time.
+**Advanced: your own model.** Settings → Advanced → Everyday brain model → **Use a model from Hugging Face** takes a link such as `https://huggingface.co/<org>/<model>-GGUF`. Liquid Agent reads the repository's GGUF list, groups split files, picks a size that should fit this computer, checks the GGUF header and chat template, and runs it on the same llama.cpp engine. A `blob` link to one `.gguf` file preselects that file. Public repositories work directly; for a gated or private one, accept its terms on Hugging Face and set `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) before starting Liquid Agent. Only text GGUF models are used here; vision/audio projectors are skipped. Switch back to the built-in LFM3 1.7B at any time. A model you add hasn't been tested with Liquid Agent's tools, so while it answers, Full Auto works like Approve for Me and Auto 200M checks each action.
 
 ## How it works
 

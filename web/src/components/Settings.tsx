@@ -275,7 +275,6 @@ function Safety({ settings }: { settings: SettingsType }) {
 
 export function PartRow({ part }: { part: Part }) {
   const busy = useStore((s) => s.busy);
-  const [customOpen, setCustomOpen] = useState(false);
   const act = (path: string, body?: unknown) => api("POST", path, body).catch(errorToast);
   const changing = busy || part.status === "installing" || part.status === "starting";
   const tone = part.status === "running" ? "ok" : part.status === "failed" ? "bad" : part.status === "installing" || part.status === "starting" ? "busy" : "off";
@@ -288,10 +287,6 @@ export function PartRow({ part }: { part: Part }) {
     failed: part.error || "Something went wrong",
   }[part.status];
   const note = part.queued && part.status !== "installing" ? "Waiting its turn…" : part.live ? `${label} · the current size keeps working meanwhile` : label;
-  const useBuiltIn = () => {
-    if (!confirm(`Stop using ${part.custom?.label ?? "this model"}? Its download will be removed and the built-in LFM3 1.7B will be used.`)) return;
-    api("DELETE", "/api/models/custom").catch(errorToast);
-  };
 
   return (
     <div className={cx("part", `status-${part.status}`)}>
@@ -325,28 +320,6 @@ export function PartRow({ part }: { part: Part }) {
               ))}
             </select>
           </label>
-        )}
-        {part.id === "small" && (
-          <div className="part-custom">
-            {part.custom ? (
-              <>
-                <span className="muted small">
-                  huggingface.co/{part.custom.repo}
-                  {part.custom.license ? ` · ${part.custom.license}` : ""}
-                </span>
-                <button className="btn" disabled={changing} onClick={() => setCustomOpen(true)}>
-                  <Link2 size={13} /> Change model
-                </button>
-                <button className="btn" disabled={changing} onClick={useBuiltIn}>
-                  Use built-in
-                </button>
-              </>
-            ) : (
-              <button className="btn" disabled={changing} onClick={() => setCustomOpen(true)}>
-                <Link2 size={13} /> Use a model from Hugging Face
-              </button>
-            )}
-          </div>
         )}
         <div className={cx("part-status", part.status === "failed" && "bad")}>
           <StatusDot tone={part.queued ? "busy" : tone} /> {note}
@@ -386,7 +359,6 @@ export function PartRow({ part }: { part: Part }) {
           </button>
         )}
       </div>
-      {customOpen && <CustomModelModal part={part} onClose={() => setCustomOpen(false)} />}
     </div>
   );
 }
@@ -447,6 +419,7 @@ function CustomModelModal({ part, onClose }: { part: Part; onClose: () => void }
       <p className="muted">
         Paste a model link from huggingface.co. Liquid Agent finds its GGUF files, checks the header and runs it on this {DEVICE}. It replaces the built-in LFM3 1.7B for chat.
       </p>
+      <div className="notice">A model you add hasn't been tested with Liquid Agent's tools. While it's answering, Full Auto works like Approve for Me: Auto 200M checks each action first.</div>
       <label className="field">
         <span>Hugging Face link</span>
         <input
@@ -518,6 +491,42 @@ function Downloads() {
   );
 }
 
+/** Swaps the Everyday brain for a GGUF model from Hugging Face. Lives in Advanced, away from Downloads and first-run setup. */
+function EverydayModel() {
+  const part = useStore((s) => s.parts.find((p) => p.id === "small"));
+  const busy = useStore((s) => s.busy);
+  const [open, setOpen] = useState(false);
+  if (!part) return null;
+  const custom = part.custom;
+  const changing = busy || part.status === "installing" || part.status === "starting";
+  const useBuiltIn = () => {
+    if (!confirm(`Stop using ${custom?.label ?? "this model"}? Its download will be removed and the built-in LFM3 1.7B will be used.`)) return;
+    api("DELETE", "/api/models/custom").catch(errorToast);
+  };
+  return (
+    <>
+      <Row
+        title="Everyday brain model"
+        detail={
+          custom
+            ? `${custom.label} · huggingface.co/${custom.repo}${custom.license ? ` · ${custom.license}` : ""}`
+            : "The built-in LFM3 1.7B. You can run a GGUF model from Hugging Face instead."
+        }
+      >
+        <button className="btn" disabled={changing} onClick={() => setOpen(true)}>
+          <Link2 size={13} /> {custom ? "Change" : "Use a model from Hugging Face"}
+        </button>
+        {custom && (
+          <button className="btn" disabled={changing} onClick={useBuiltIn}>
+            Use built-in
+          </button>
+        )}
+      </Row>
+      {open && <CustomModelModal part={part} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 function Advanced({ settings }: { settings: SettingsType }) {
   const num = (key: keyof SettingsType, min: number, max: number) => (v: string) => {
     const n = Number(v);
@@ -527,6 +536,7 @@ function Advanced({ settings }: { settings: SettingsType }) {
   return (
     <>
       <h3>Advanced</h3>
+      <EverydayModel />
       <Row title="Memory for each chat" detail="How many tokens of the conversation go to the model. Smaller is faster.">
         <SavedInput type="number" width={110} value={String(settings.contextBudget)} onSave={num("contextBudget", 1000, 14000)} />
       </Row>

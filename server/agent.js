@@ -198,9 +198,13 @@ export const agent = {
         const searches = reply.steps.filter((x) => x.tool === "web_search").length;
         const tools = offer ? activeTools().filter((t) => t.name !== "web_search" || searches < 2) : [];
         const final = step === settings.maxSteps;
+        // A custom model may hold less than the usual budget: keep half its context for the answer.
+        const context = backends.contextTokens(route.id);
+        const budget = Math.min(settings.contextBudget, Math.floor(context / 2));
         const wire = buildWire(chat.messages, {
           system: systemPrompt({ tools, omni: route.id === "omni", query: request.content }),
           omni: route.id === "omni",
+          budget,
         });
         // Out of steps: ask for an answer from what was found instead of another call.
         if (final) {
@@ -217,7 +221,7 @@ export const agent = {
         let thought = "";
         // The built-in brain always reasons first; a custom model only thinks when its template supports it.
         const think = route.id === "small" && backends.supportsThinking("small");
-        const maxTokens = Math.max(256, Math.min(think ? 6144 : 1536, backends.contextTokens(route.id) - settings.contextBudget));
+        const maxTokens = Math.max(256, Math.min(think ? 6144 : 1536, context - budget));
         for await (const part of stream({
           url: model.url(),
           model: model.id,
@@ -327,7 +331,9 @@ export const agent = {
     if (tool?.free) return { approved: true, decision: "Automatic" };
     if (hardDeny(step.tool, step.args)) return ask(`This command can change important parts of your ${DEVICE}.`);
     if (mode === "askAlways") return ask();
-    if (mode === "fullAuto") return { approved: true, decision: "Full Auto" };
+    // A model added from Hugging Face hasn't been tested with these tools, so in Full Auto
+    // its actions still go through the safety check, as in Approve for Me.
+    if (mode === "fullAuto" && !(message.model === "small" && backends.custom)) return { approved: true, decision: "Full Auto" };
     if (tool.kind !== "write") return { approved: true, decision: tool.kind === "read" ? "Read-only, safe" : "Safe" };
 
     step.status = "checking";

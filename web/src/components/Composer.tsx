@@ -51,6 +51,7 @@ export function fill(text: string) {
 export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean }) {
   const { running, settings, parts, guardianWanted } = useStore();
   const guardian = parts.find((p) => p.id === "guardian");
+  const customBrain = parts.find((p) => p.id === "small")?.custom;
   // The draft survives a reload, such as the one after the server restarts.
   const draftKey = `la:draft:${chat?.id ?? "new"}`;
   const [text, setText] = useState(() => {
@@ -379,7 +380,10 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
               items={MODES.map((m) => ({
                 label: m.label,
                 icon: m.icon,
-                detail: (m.value === "approveForMe" && modeNote(guardian, guardianWanted)) || m.detail,
+                detail:
+                  (m.value === "approveForMe" && modeNote(guardian, guardianWanted)) ||
+                  (m.value === "fullAuto" && customBrain && "Your own model is answering, so Auto 200M still checks each action.") ||
+                  m.detail,
                 checked: m.value === mode.value,
                 onClick: () => api("PATCH", "/api/settings", { approvalMode: m.value }).catch(errorToast),
               }))}

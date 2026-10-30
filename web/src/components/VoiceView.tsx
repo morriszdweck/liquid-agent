@@ -1,10 +1,11 @@
 // Voice chat with LFM3 Omni 2B: it hears you, thinks and talks back in one
-// model. Talk over it any time to interrupt.
+// model. Talk over it any time to interrupt. With the camera on, it also gets a
+// frame when you start talking and every few seconds while you talk.
 
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Keyboard, Mic, MicOff, PhoneOff, Send, Wrench } from "lucide-react";
+import { AudioLines, Keyboard, Mic, MicOff, PhoneOff, Send, Video, VideoOff, Wrench } from "lucide-react";
 import { socketURL } from "../api";
-import { Mic as Microphone, SpeechDetector } from "../audio/capture";
+import { Camera, Mic as Microphone, SpeechDetector } from "../audio/capture";
 import { Player } from "../audio/player";
 import { stopSpeaking } from "../audio/speak";
 import { go, part, useStore } from "../store";
@@ -12,6 +13,9 @@ import { DEVICE, cx } from "../util";
 import { ApprovalDock } from "./ApprovalDock";
 import { TopBar } from "./Shell";
 import { Empty, Spinner } from "./ui";
+
+type Session = { ws: WebSocket; mic?: Microphone; player?: Player; camera?: Camera; lastFrame: number; level: number };
+const FRAME_EVERY_MS = 4000;
 
 type Phase = "idle" | "connecting" | "listening" | "hearing" | "thinking" | "speaking" | "working" | "ended";
 
@@ -36,10 +40,12 @@ export function VoiceView({ chatId }: { chatId?: string }) {
   const [muted, setMuted] = useState(false);
   const [typing, setTyping] = useState(false);
   const [typed, setTyped] = useState("");
+  const [video, setVideo] = useState(false);
   const [sessionChat, setSessionChat] = useState<string | undefined>(chatId);
   const hasTranscript = useStore((s) => s.chats.some((c) => c.id === sessionChat && c.messages.length > 0));
   const orb = useRef<HTMLDivElement>(null);
-  const session = useRef<{ ws: WebSocket; mic?: Microphone; player?: Player; level: number } | null>(null);
+  const preview = useRef<HTMLVideoElement>(null);
+  const session = useRef<Session | null>(null);
   const ready = omni?.status === "running";
 
   function end() {
@@ -52,6 +58,39 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     s.ws.close();
     s.mic?.stop();
     s.player?.close();
+    s.camera?.stop();
+    setVideo(false);
+  }
+
+  /** Sends what the camera sees now, if it's on. */
+  function sendFrame(s: Session) {
+    const image = s.camera?.snapshot();
+    if (!image || s.ws.readyState !== WebSocket.OPEN) return;
+    s.lastFrame = Date.now();
+    s.ws.send(JSON.stringify({ type: "frame", image }));
+  }
+
+  async function toggleVideo() {
+    const s = session.current;
+    if (!s) return;
+    if (s.camera) {
+      s.camera.stop();
+      s.camera = undefined;
+      setVideo(false);
+      return;
+    }
+    const camera = new Camera();
+    try {
+      await camera.start();
+    } catch {
+      camera.stop();
+      setError("I can't use the camera. Allow it in your browser's site settings, then try again.");
+      return;
+    }
+    if (session.current !== s) return camera.stop();
+    s.camera = camera;
+    setError("");
+    setVideo(true);
   }
 
   async function start() {
@@ -64,7 +103,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     setPhase("connecting");
     const ws = new WebSocket(socketURL("/voice"));
     ws.binaryType = "arraybuffer";
-    const s: { ws: WebSocket; mic?: Microphone; player?: Player; level: number } = { ws, level: 0 };
+    const s: Session = { ws, lastFrame: 0, level: 0 };
     session.current = s;
     let streaming = false;
 
@@ -96,10 +135,12 @@ export function VoiceView({ chatId }: { chatId?: string }) {
               }
               streaming = true;
               setPhase("hearing");
+              sendFrame(s);
               for (const f of preroll) ws.send(f);
             },
             frame(pcm) {
               ws.send(pcm);
+              if (s.camera && Date.now() - s.lastFrame > FRAME_EVERY_MS) sendFrame(s);
             },
             end() {
               ws.send(JSON.stringify({ type: "commit" }));
@@ -156,6 +197,10 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     if (session.current?.mic) session.current.mic.muted = muted;
   }, [muted]);
 
+  useEffect(() => {
+    if (preview.current) preview.current.srcObject = (video && session.current?.camera?.stream) || null;
+  }, [video]);
+
   // The orb breathes with whoever is talking.
   useEffect(() => {
     let frame = 0;
@@ -175,6 +220,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     const text = typed.trim();
     if (!text || !session.current) return;
     session.current.player?.flush();
+    sendFrame(session.current);
     session.current.ws.send(JSON.stringify({ type: "text", text }));
     setYou(text);
     setAgentText("");
@@ -208,6 +254,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     <div className="page voice">
       <TopBar title="Voice chat" right={<span className="pill pill-muted">On this {DEVICE}</span>} />
       <div className="voice-stage">
+        {video && live && <video ref={preview} className="voice-preview" autoPlay muted playsInline aria-label="Your camera" />}
         <div ref={orb} className={cx("orb", `phase-${phase}`, muted && "muted")}>
           <div className="orb-glow" />
           <div className="orb-core" />
@@ -250,6 +297,14 @@ export function VoiceView({ chatId }: { chatId?: string }) {
             <>
               <button className={cx("voice-btn", muted && "on")} onClick={() => setMuted(!muted)} aria-label={muted ? "Unmute" : "Mute"}>
                 {muted ? <MicOff size={20} /> : <Mic size={20} />}
+              </button>
+              <button
+                className={cx("voice-btn", video && "on")}
+                onClick={toggleVideo}
+                aria-label={video ? "Turn camera off" : "Turn camera on"}
+                title={video ? "Turn camera off" : "Turn camera on so it can see what you show it"}
+              >
+                {video ? <Video size={20} /> : <VideoOff size={20} />}
               </button>
               <button className={cx("voice-btn", typing && "on")} onClick={() => setTyping(!typing)} aria-label="Type instead">
                 <Keyboard size={20} />

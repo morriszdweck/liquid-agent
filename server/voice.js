@@ -3,7 +3,11 @@
 //
 // Browser -> server: {type:"start", chatId?}, binary PCM16 mono at inputRate,
 //                    {type:"commit"} at the end of an utterance, {type:"text", text},
+//                    {type:"frame", image} with a base64 JPEG while the camera is on,
 //                    {type:"cancel"} to interrupt, {type:"stop"}.
+//
+// The realtime API takes only audio and text, so camera frames go to Omni's other slot,
+// which describes the newest one; the description joins the turn as a short note.
 // Server -> browser: {type:"ready", inputRate, outputRate, chatId}, {type:"state", state},
 //                    {type:"user", text}, {type:"assistant", text}, {type:"tool", label, status},
 //                    binary PCM16 mono at outputRate, {type:"turn.done"}, {type:"error", message}.
@@ -12,11 +16,15 @@ import WebSocket from "ws";
 import { settings } from "./core.js";
 import { agent } from "./agent.js";
 import { backends } from "./backends.js";
-import { transcribe } from "./omni.js";
+import { look, transcribe } from "./omni.js";
 import { voiceInstructions } from "./prompt.js";
 import { activeTools, runTool, schema, toolMap } from "./tools.js";
 
 const MAX_REPLY_SECONDS = 45;
+// How long a turn waits for the newest camera frame to be described.
+const LOOK_WAIT_MS = 2500;
+const LOOK =
+  "This is a frame from the user's camera during a voice call. In one or two short sentences, say what it shows: people and what they are doing, anything held up to the camera, readable text and the setting. No preamble.";
 
 function wav(pcm, rate) {
   const header = Buffer.alloc(44);
@@ -53,6 +61,11 @@ export function handleVoice(client) {
   let createQueued = false;
   let audioBytes = 0;
   let throttle = 0;
+  let frameSeq = 0; // camera frames received
+  let usedSeq = 0; // frames an earlier turn already covered
+  let looking = null; // { seq, done } for the frame being described
+  let nextFrame = null; // { seq, jpeg }, the newest frame that came in meanwhile
+  let seen = { seq: 0, text: "" };
 
   const send = (obj) => client.readyState === 1 && client.send(JSON.stringify(obj));
   const up = (obj) => upstream?.readyState === 1 && upstream.send(JSON.stringify(obj));
@@ -221,7 +234,45 @@ export function handleVoice(client) {
     createResponse();
   }
 
-  function commit() {
+  function describe(frame) {
+    const done = look(frame.jpeg, "image/jpeg", LOOK, { signal: controller.signal, maxTokens: 120 })
+      .then((text) => {
+        if (frame.seq > seen.seq && text.trim()) seen = { seq: frame.seq, text: text.trim().replace(/\s+/g, " ") };
+      })
+      .catch(() => {})
+      .finally(() => {
+        looking = null;
+        if (nextFrame) {
+          const next = nextFrame;
+          nextFrame = null;
+          describe(next);
+        }
+      });
+    looking = { seq: frame.seq, done };
+  }
+
+  function onFrame(image) {
+    if (typeof image !== "string" || image.length > 3_000_000) return;
+    const jpeg = Buffer.from(image, "base64");
+    if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return;
+    const frame = { seq: ++frameSeq, jpeg };
+    if (looking) nextFrame = frame;
+    else describe(frame);
+  }
+
+  /** What the camera showed since the last turn, after a short wait for the newest frame. */
+  async function cameraNote() {
+    const upto = frameSeq;
+    const from = usedSeq;
+    if (upto === from) return "";
+    usedSeq = upto;
+    const until = Date.now() + LOOK_WAIT_MS;
+    const busy = () => (looking && looking.seq <= upto) || (nextFrame && nextFrame.seq <= upto);
+    while (busy() && Date.now() < until) await Promise.race([looking.done, new Promise((r) => setTimeout(r, until - Date.now()))]);
+    return seen.seq > from ? `(On camera right now: ${seen.text})` : "";
+  }
+
+  async function commit() {
     const audio = Buffer.concat(heard);
     heard = [];
     if (audio.length < inputRate * 2 * 0.3) {
@@ -230,9 +281,14 @@ export function handleVoice(client) {
     }
     beginTurn("…");
     const turnUser = user;
+    const turnReply = reply;
     up({ type: "input_audio_buffer.commit" });
+    // A commit leaves the user's turn open, so the camera note joins the same message.
+    const note = await cameraNote();
+    if (reply !== turnReply) return; // interrupted meanwhile
+    if (note) up({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: note }] } });
     createResponse();
-    // The realtime session doesn't return what it heard, so Omni's second slot transcribes in parallel.
+    // The realtime session doesn't return what it heard, so Omni's second slot transcribes it.
     transcribe(wav(audio, inputRate), { signal: controller.signal })
       .then((text) => {
         turnUser.content = text || "(voice message)";
@@ -243,6 +299,15 @@ export function handleVoice(client) {
         turnUser.content = "(voice message)";
         agent.emitChat(chat);
       });
+  }
+
+  async function typed(text) {
+    beginTurn(text);
+    const turnReply = reply;
+    const note = await cameraNote();
+    if (reply !== turnReply) return;
+    up({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: note ? `${text}\n\n${note}` : text }] } });
+    createResponse();
   }
 
   client.on("message", (data, binary) => {
@@ -261,11 +326,9 @@ export function handleVoice(client) {
     }
     if (msg.type === "start" && !upstream) start(msg);
     else if (msg.type === "commit") commit();
-    else if (msg.type === "text" && String(msg.text ?? "").trim()) {
-      beginTurn(String(msg.text).trim());
-      up({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: user.content }] } });
-      createResponse();
-    } else if (msg.type === "cancel") {
+    else if (msg.type === "frame" && upstream) onFrame(msg.image);
+    else if (msg.type === "text" && String(msg.text ?? "").trim()) typed(String(msg.text).trim());
+    else if (msg.type === "cancel") {
       heard = [];
       if (responding) up({ type: "response.cancel" });
       if (reply) {

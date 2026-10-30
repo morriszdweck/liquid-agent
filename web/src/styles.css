@@ -2244,6 +2244,7 @@ input[type="range"] {
 /* ---------- Voice ---------- */
 
 .voice-stage {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -2328,6 +2329,27 @@ input[type="range"] {
 .caption.agent {
   color: var(--fg);
   font-size: 19px;
+}
+.voice-preview {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 184px;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: #000;
+  box-shadow: var(--shadow);
+  /* A mirror, the way people expect to see themselves. */
+  transform: scaleX(-1);
+}
+@media (max-width: 600px) {
+  .voice-preview {
+    width: 112px;
+    top: 12px;
+    right: 12px;
+  }
 }
 .voice-error {
   max-width: 540px;
@@ -2873,13 +2895,6 @@ input[type="range"] {
   padding: 0 8px;
   font-size: 12.5px;
   max-width: 100%;
-}
-.part-custom {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
 }
 .notice.bad {
   background: var(--danger-soft);

@@ -59,6 +59,7 @@ export function voiceInstructions(history = []) {
     `You are Liquid Agent, a private voice assistant running locally on the user's ${MACHINE}. ${persona()}`,
     "You are speaking out loud. Answer in one or two short sentences with plain, natural words. Never use markdown, lists, symbols, emoji or code.",
     `When the user asks you to do something on the ${DEVICE}, with files, reminders or memory, call a tool, then say the result in a few words. For news, weather, prices or facts you aren't sure of, use web_search first.`,
+    "When the user's camera is on, their message ends with a note like (On camera right now: ...). That is what you can see through the camera: use it when it helps, and don't read the note out.",
     `Now: ${now()}.`,
     memory.promptBlock(recent),
     recent && `Earlier in this chat:\n${recent}`,
