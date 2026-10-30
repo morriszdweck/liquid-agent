@@ -76,13 +76,13 @@ export type Settings = {
   theme: "system" | "light" | "dark";
   voice: "female" | "male";
   speakReplies: boolean;
+  autoUpdate: boolean;
   workspace: string;
   guardianThreshold: number;
   contextBudget: number;
   toolOutputLimit: number;
   maxSteps: number;
   temperature: number;
-  reasoning: boolean;
   smallQuant: string;
   omniQuant: string;
   smallURL: string;
@@ -117,6 +117,21 @@ export type ActivityEntry = {
 
 export type Reminder = { id: string; text: string; at: number };
 
+/** Where this copy stands on updating itself. */
+export type Update = {
+  version: string;
+  /** Release build number; null when running from a source checkout. */
+  build: number | null;
+  /** Whether this copy can replace itself. */
+  managed: boolean;
+  state: "idle" | "checking" | "downloading" | "ready" | "updating" | "error";
+  /** The downloaded build waiting to go in. */
+  ready: number | null;
+  progress: number;
+  error: string;
+  checkedAt: number;
+};
+
 export type Snapshot = {
   chats: Chat[];
   running: string[];
@@ -131,4 +146,5 @@ export type Snapshot = {
   activity: ActivityEntry[];
   reminders: Reminder[];
   dataDir: string;
+  update: Update;
 };

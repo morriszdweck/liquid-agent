@@ -27,7 +27,7 @@ import { api, fileURL } from "../api";
 import { speak, stopSpeaking } from "../audio/speak";
 import { errorToast, go, modelsReady, useStore } from "../store";
 import type { Attachment, Chat, Message } from "../types";
-import { chatMarkdown, cx, download, duration, greeting, modelLabel } from "../util";
+import { chatMarkdown, cx, download, duration, greeting } from "../util";
 import { ApprovalDock } from "./ApprovalDock";
 import { Composer } from "./Composer";
 import { Markdown } from "./Markdown";
@@ -315,22 +315,25 @@ function UserMessage({ chat, message, busy, onZoom }: { chat: Chat; message: Mes
   );
 }
 
-/** The model's thinking: a live peek while it thinks, then a line you can open. */
+/** What LFM3 1.7B shows while it reasons before answering. */
+const THINKING = "Thinking for a better answer…";
+
+/** The reasoning behind an answer: one closed line, which opens when you tap it. */
 function Thoughts({ text, ms, active }: { text: string; ms?: number; active: boolean }) {
   const [open, setOpen] = useState(false);
-  const peek = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (active && peek.current) peek.current.scrollTop = peek.current.scrollHeight;
-  }, [text, active]);
+    if (active && body.current) body.current.scrollTop = body.current.scrollHeight;
+  }, [text, active, open]);
   return (
     <div className={cx("thoughts", open && "open", active && "active")}>
-      <button className="thoughts-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button className="thoughts-head" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? "Hide reasoning" : "Show reasoning"}>
         <Lightbulb size={14} />
-        <span className={active ? "shimmer" : undefined}>{active ? "Thinking" : ms ? `Thought for ${duration(ms)}` : "Thoughts"}</span>
+        <span className={active ? "shimmer" : undefined}>{active ? THINKING : ms ? `Thought for ${duration(ms)}` : "Thoughts"}</span>
         <ChevronRight size={14} className="thoughts-chev" />
       </button>
-      {(open || active) && (
-        <div ref={peek} className={cx("thoughts-body", !open && "peek")}>
+      {open && (
+        <div ref={body} className="thoughts-body">
           {text}
         </div>
       )}
@@ -364,7 +367,7 @@ function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: 
       {thinking && !thinkingNow && (
         <div className="thinking">
           <span className="thinking-dot" />
-          <span className="shimmer">{steps.length ? "Reading the results" : "Thinking"}</span>
+          <span className="shimmer">{steps.length ? "Reading the results" : message.model === "small" ? THINKING : "Thinking"}</span>
         </div>
       )}
       {text && <Markdown streaming={streaming}>{text}</Markdown>}
@@ -404,11 +407,9 @@ function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: 
               <RefreshCw size={15} />
             </IconButton>
           )}
-          {message.model && (
-            <span className="msg-stats" title={message.stats ? `${message.stats.tokens} tokens` : undefined}>
-              {modelLabel(message.model)}
-              {message.stats?.tps ? ` · ${message.stats.tps} tok/s` : ""}
-              {message.stats?.ms ? ` · ${duration(message.stats.ms)}` : ""}
+          {message.stats && (message.stats.tps > 0 || message.stats.ms > 0) && (
+            <span className="msg-stats" title={`${message.stats.tokens} tokens`}>
+              {[message.stats.tps > 0 && `${message.stats.tps} tok/s`, message.stats.ms > 0 && duration(message.stats.ms)].filter(Boolean).join(" · ")}
             </span>
           )}
         </div>

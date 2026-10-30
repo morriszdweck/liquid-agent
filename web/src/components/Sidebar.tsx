@@ -55,11 +55,9 @@ export function Sidebar() {
   const fetching = parts.find((p) => p.status === "installing");
   const status = fetching
     ? { tone: "busy" as const, text: `Downloading ${fetching.title.toLowerCase()}${fetching.fraction ? ` · ${Math.round(fetching.fraction * 100)}%` : "…"}` }
-    : up.length === 2
-      ? { tone: "ok" as const, text: "Ready · 1.7B + Omni" }
-      : up.length === 1
-        ? { tone: "ok" as const, text: `Ready · ${up[0]!.id === "omni" ? "Omni" : "1.7B"}` }
-        : starting
+    : up.length
+      ? { tone: "ok" as const, text: "Ready" }
+      : starting
           ? { tone: "busy" as const, text: "Starting models…" }
           : { tone: "bad" as const, text: "Set up models" };
 

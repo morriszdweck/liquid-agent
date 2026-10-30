@@ -35,7 +35,11 @@ function wav(pcm, rate) {
   return Buffer.concat([header, pcm]);
 }
 
+/** Open voice calls, so an update waits until they end. */
+export const voiceCalls = new Set();
+
 export function handleVoice(client) {
+  voiceCalls.add(client);
   const controller = new AbortController();
   let upstream = null;
   let chat = null;
@@ -92,8 +96,8 @@ export function handleVoice(client) {
       const waking = backends.states.omni?.status === "starting";
       return fail(
         waking
-          ? "Eyes and ears (LFM3 Omni 2B) is still waking up. Try again in a few seconds."
-          : "Voice chat needs the Eyes and ears part (LFM3 Omni 2B). Set it up in Settings → Downloads.",
+          ? "Eyes and ears is still waking up. Try again in a few seconds."
+          : "Voice chat needs the Eyes and ears part. Set it up in Settings → Downloads.",
       );
     }
     chat = (chatId && agent.chat(chatId)) || agent.create({ title: "Voice chat", source: "voice" });
@@ -106,7 +110,7 @@ export function handleVoice(client) {
         fail(String(e?.message ?? e));
       }
     });
-    upstream.on("error", () => fail("Couldn't reach Omni's voice service."));
+    upstream.on("error", () => fail("Couldn't reach the voice service."));
     upstream.on("close", () => {
       finishTurn("stopped");
       if (client.readyState === 1) client.close();
@@ -273,6 +277,7 @@ export function handleVoice(client) {
   });
 
   client.on("close", () => {
+    voiceCalls.delete(client);
     controller.abort();
     finishTurn("stopped");
     upstream?.close();

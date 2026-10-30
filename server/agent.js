@@ -165,7 +165,7 @@ export const agent = {
     const up = (id) => backends.running(id);
     if (media) {
       if (up("omni")) return { id: "omni" };
-      return { error: "Pictures and audio need the Eyes and ears part (LFM3 Omni 2B). Turn it on in Settings → Downloads." };
+      return { error: "Pictures and audio need the Eyes and ears part. Turn it on in Settings → Downloads." };
     }
     if (up("small")) return { id: "small" };
     if (up("omni")) return { id: "omni" };
@@ -215,8 +215,8 @@ export const agent = {
         const thinkStart = Date.now();
         let thinkEnd = 0;
         let thought = "";
-        // LFM3 Omni 2B is a non-reasoning model; only LFM3 1.7B thinks.
-        const think = settings.reasoning && route.id === "small";
+        // LFM3 1.7B always reasons first; LFM3 Omni 2B is a non-reasoning model.
+        const think = route.id === "small";
         for await (const part of stream({
           url: model.url(),
           model: model.id,

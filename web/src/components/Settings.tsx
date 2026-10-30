@@ -27,10 +27,10 @@ import { api } from "../api";
 import { speak, stopSpeaking } from "../audio/speak";
 import { errorToast, toast, useStore } from "../store";
 import type { Part, Settings as SettingsType } from "../types";
-import { DEVICE, IS_MAC, cx } from "../util";
+import { DEVICE, IS_MAC, cx, timeAgo } from "../util";
 import { MODES, modeNote } from "./Composer";
 import { Logo } from "./Sidebar";
-import { Modal, Progress, Segmented, StatusDot, Toggle } from "./ui";
+import { Modal, Progress, Segmented, Spinner, StatusDot, Toggle } from "./ui";
 
 const patch = (body: Partial<SettingsType>) => api("PATCH", "/api/settings", body).catch(errorToast);
 
@@ -123,9 +123,6 @@ function General({ settings }: { settings: SettingsType }) {
           <option value="professional">Professional</option>
         </select>
       </Row>
-      <Row title="Think before answering" detail="LFM3 1.7B works it out first, then answers. Slower, but much better answers. LFM3 Omni 2B can't think, so pictures and audio are answered right away. Also under the message box.">
-        <Toggle checked={settings.reasoning} onChange={(reasoning) => patch({ reasoning })} />
-      </Row>
       <Row title="Appearance">
         <Segmented
           size="sm"
@@ -143,6 +140,49 @@ function General({ settings }: { settings: SettingsType }) {
       </Row>
       <Row title="Notifications" detail="Tell me when an answer is ready or needs your OK while this tab is in the background.">
         <NotificationButton />
+      </Row>
+      <Updates settings={settings} />
+    </>
+  );
+}
+
+/** The version, and whether it keeps itself up to date. */
+function Updates({ settings }: { settings: SettingsType }) {
+  const update = useStore((s) => s.update);
+  if (!update) return null;
+  if (!update.managed)
+    return (
+      <Row
+        title={`Version ${update.version}`}
+        detail={update.build ? "It can't change its own folder, so run liquid-agent update to get the newest version." : "This copy runs from source. Update it with git pull."}
+      >
+        <span className="muted small">{update.build ? `Build ${update.build}` : "From source"}</span>
+      </Row>
+    );
+  const working = update.state === "checking" || update.state === "downloading" || update.state === "updating";
+  const status = {
+    idle: update.checkedAt ? `Up to date. Checked ${timeAgo(update.checkedAt)}.` : settings.autoUpdate ? "Checks for a new version every few hours." : "Check for a new version whenever you like.",
+    checking: "Checking for a new version…",
+    downloading: `Downloading the new version… ${update.progress}%`,
+    ready: settings.autoUpdate ? "A new version is ready. It goes in when nothing is running." : "A new version is ready.",
+    updating: "Restarting with the new version…",
+    error: update.error,
+  }[update.state];
+  return (
+    <>
+      <Row title="Update by itself" detail="Gets new versions in the background and switches over when nothing is running. Your chats and downloads stay.">
+        <Toggle checked={settings.autoUpdate} onChange={(autoUpdate) => patch({ autoUpdate })} />
+      </Row>
+      <Row title={`Version ${update.version}, build ${update.build}`} detail={status}>
+        {update.state === "ready" ? (
+          <button className="btn primary" onClick={() => api("POST", "/api/update/apply").catch(errorToast)}>
+            <Download size={14} /> Update now
+          </button>
+        ) : (
+          <button className="btn" disabled={working} onClick={() => api("POST", "/api/update/check").catch(errorToast)}>
+            {working ? <Spinner size={13} /> : <RotateCcw size={14} />} Check now
+          </button>
+        )}
       </Row>
     </>
   );

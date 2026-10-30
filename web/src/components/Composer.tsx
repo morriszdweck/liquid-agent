@@ -6,9 +6,7 @@ import {
   ArrowUp,
   AudioLines,
   Check,
-  ChevronDown,
   FileText,
-  Lightbulb,
   Mic,
   Monitor,
   Music,
@@ -201,7 +199,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }
 
   async function lookAtScreen() {
-    if (!omniUp) return toast("Seeing your screen needs Eyes and ears (LFM3 Omni 2B). Set it up in Settings → Downloads.", "error");
+    if (!omniUp) return toast("Seeing your screen needs Eyes and ears. Set it up in Settings → Downloads.", "error");
     try {
       const shot = await captureScreen();
       await addFiles([shot], [`Screen ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.jpg`]);
@@ -213,7 +211,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }
 
   async function startDictation() {
-    if (!omniUp) return toast("Dictation needs Eyes and ears (LFM3 Omni 2B). Set it up in Settings → Downloads.", "error");
+    if (!omniUp) return toast("Dictation needs Eyes and ears. Set it up in Settings → Downloads.", "error");
     const chunks: Int16Array[] = [];
     const m = new Microphone(16000, (f) => {
       chunks.push(f.pcm);
@@ -257,11 +255,6 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }
 
   const mode = MODES.find((m) => m.value === settings?.approvalMode) ?? MODES[0];
-  // The server's rule (agent.route): Omni when this message or the one before has a picture or audio, or when 1.7B is off.
-  const media = (list?: { kind: string }[]) => Boolean(list?.some((f) => f.kind === "image" || f.kind === "audio"));
-  const lastAsk = chat?.messages.filter((m) => m.role === "user").at(-1);
-  const usesOmni = media(files) || media(lastAsk?.attachments) || (omniUp && part(parts, "small")?.status !== "running");
-  const modelHint = usesOmni ? "LFM3 Omni 2B" : "LFM3 1.7B";
 
   return (
     <div className="composer-wrap">
@@ -356,7 +349,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
               )}
               items={[
                 { label: "Add photos and files", icon: <Paperclip size={15} />, onClick: () => picker.current?.click() },
-                { label: "Look at my screen", icon: <Monitor size={15} />, onClick: lookAtScreen, hint: "Omni" },
+                { label: "Look at my screen", icon: <Monitor size={15} />, onClick: lookAtScreen },
               ]}
             />
             <input
@@ -369,8 +362,30 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                 e.target.value = "";
               }}
             />
+            <Menu
+              side="top"
+              width={300}
+              trigger={(open, toggle) => (
+                <button
+                  className={cx("mode-btn", open && "active")}
+                  onClick={toggle}
+                  aria-label={`Permissions: ${mode.label}`}
+                  title={guardianWanted ? "Approve for Me turns on once Auto 200M is ready" : "Permissions"}
+                >
+                  {guardianWanted && guardian?.status !== "failed" ? <Spinner size={14} /> : mode.icon}
+                  <span>{mode.label}</span>
+                </button>
+              )}
+              items={MODES.map((m) => ({
+                label: m.label,
+                icon: m.icon,
+                detail: (m.value === "approveForMe" && modeNote(guardian, guardianWanted)) || m.detail,
+                checked: m.value === mode.value,
+                onClick: () => api("PATCH", "/api/settings", { approvalMode: m.value }).catch(errorToast),
+              }))}
+            />
             <div className="composer-spacer" />
-            <button className="round-btn ghost" onClick={startDictation} aria-label="Dictate" title="Dictate (Omni)">
+            <button className="round-btn ghost" onClick={startDictation} aria-label="Dictate" title="Dictate">
               <Mic size={17} />
             </button>
             {busy ? (
@@ -382,52 +397,12 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                 {uploading ? <Spinner size={14} /> : <ArrowUp size={18} />}
               </button>
             ) : (
-              <button className="round-btn primary voice" onClick={() => go(chat ? `#/voice/${chat.id}` : "#/voice")} aria-label="Voice chat" title="Voice chat (Omni)">
+              <button className="round-btn primary voice" onClick={() => go(chat ? `#/voice/${chat.id}` : "#/voice")} aria-label="Voice chat" title="Voice chat">
                 <AudioLines size={18} />
               </button>
             )}
           </div>
         )}
-      </div>
-
-      <div className="composer-foot">
-        <Menu
-          side="top"
-          width={300}
-          trigger={(open, toggle) => (
-            <button className={cx("foot-btn", open && "active")} onClick={toggle} title={guardianWanted ? "Approve for Me turns on once Auto 200M is ready" : undefined}>
-              {guardianWanted && guardian?.status !== "failed" ? <Spinner size={13} /> : mode.icon}
-              {mode.label}
-              <ChevronDown size={13} />
-            </button>
-          )}
-          items={MODES.map((m) => ({
-            label: m.label,
-            icon: m.icon,
-            detail: (m.value === "approveForMe" && modeNote(guardian, guardianWanted)) || m.detail,
-            checked: m.value === mode.value,
-            onClick: () => api("PATCH", "/api/settings", { approvalMode: m.value }).catch(errorToast),
-          }))}
-        />
-        <span className="foot-model" title="Liquid Agent picks the model for you">
-          Auto · {modelHint}
-        </span>
-        <button
-          className={cx("foot-btn", usesOmni ? "unavailable" : settings?.reasoning && "on")}
-          aria-pressed={Boolean(settings?.reasoning)}
-          aria-disabled={usesOmni}
-          title={
-            usesOmni
-              ? "Thinking is unavailable right now."
-              : settings?.reasoning
-                ? "LFM3 1.7B thinks before answering: slower, better answers. Click to turn off."
-                : "Answers right away. Click to have LFM3 1.7B think first."
-          }
-          onClick={() => usesOmni || api("PATCH", "/api/settings", { reasoning: !settings?.reasoning }).catch(errorToast)}
-        >
-          <Lightbulb size={14} />
-          Think
-        </button>
       </div>
     </div>
   );

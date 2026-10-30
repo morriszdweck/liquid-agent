@@ -113,4 +113,3 @@ export function download(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export const modelLabel = (m?: string) => (m === "omni" ? "LFM3 Omni 2B" : "LFM3 1.7B");

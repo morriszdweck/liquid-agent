@@ -1,8 +1,8 @@
 // App state, kept in sync with the server over one WebSocket.
 
 import { create } from "zustand";
-import { socketURL } from "./api";
-import type { ActivityEntry, Chat, Idea, Part, Reminder, Routine, Settings, Snapshot, Step } from "./types";
+import { socketURL, token } from "./api";
+import type { ActivityEntry, Chat, Idea, Part, Reminder, Routine, Settings, Snapshot, Step, Update } from "./types";
 
 export type Toast = { id: number; text: string; tone?: "error" | "info" };
 export type Route =
@@ -32,6 +32,7 @@ type State = {
   activity: ActivityEntry[];
   reminders: Reminder[];
   dataDir: string;
+  update: Update | null;
   route: Route;
   settingsOpen: string | null;
   sidebarOpen: boolean;
@@ -57,6 +58,7 @@ export const useStore = create<State>(() => ({
   activity: [],
   reminders: [],
   dataDir: "",
+  update: null,
   route: parseRoute(),
   settingsOpen: null,
   sidebarOpen: false,
@@ -143,6 +145,7 @@ type Event =
   | { type: "running"; running: string[] }
   | { type: "parts"; parts: Part[]; busy: boolean; guardianWanted: boolean }
   | { type: "settings"; settings: Settings }
+  | { type: "update"; update: Update }
   | { type: "memory"; facts: string[] }
   | { type: "ideas"; ideas: { at: number; items: Idea[] } }
   | { type: "routines"; routines: Routine[] }
@@ -156,6 +159,7 @@ function onEvent(e: Event) {
     case "hello": {
       const { type: _, ...snapshot } = e;
       set({ ...snapshot, chats: [...snapshot.chats].sort((a, b) => b.updatedAt - a.updatedAt), loaded: true, live: {} });
+      noteUpdated(snapshot.update);
       break;
     }
     case "chat":
@@ -175,6 +179,9 @@ function onEvent(e: Event) {
       break;
     case "settings":
       set({ settings: e.settings });
+      break;
+    case "update":
+      set({ update: e.update });
       break;
     case "memory":
       set({ memory: e.facts });
@@ -215,8 +222,27 @@ export function connect() {
     set({ connected: false });
     socket = null;
     retry = Math.min(retry + 1, 6);
-    setTimeout(connect, 300 * 2 ** retry);
+    setTimeout(reconnect, 300 * 2 ** retry);
   };
+}
+
+/** After a restart (an update, say) the server has a new token, and only a reload picks it up. */
+async function reconnect() {
+  try {
+    const res = await fetch("/api/ping", { headers: { "X-Liquid-Token": token } });
+    if (res.status === 401) return location.reload();
+  } catch {}
+  connect();
+}
+
+/** Says so once when the page comes back on a newer build. */
+function noteUpdated(update: Update | undefined) {
+  if (!update?.build) return;
+  try {
+    const seen = Number(sessionStorage.getItem("la:build"));
+    sessionStorage.setItem("la:build", String(update.build));
+    if (seen && update.build > seen) toast("Liquid Agent updated itself.");
+  } catch {}
 }
 
 // ---- Selectors ----

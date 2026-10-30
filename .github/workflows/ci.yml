@@ -25,6 +25,35 @@ jobs:
       - run: for f in server/*.js scripts/*.mjs; do node --check "$f"; done
       - run: bash -n install.sh && bash -n scripts/start.sh
       - run: npm test
+      - run: node scripts/bundle.mjs --build 1 && tar -tzf release/liquid-agent.tar.gz liquid-agent/build.json liquid-agent/node_modules/ws/package.json
+
+  bundle:
+    name: Ready-to-run bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the build number is the number of commits
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Pack it, plus a newer build to test updating with
+        run: |
+          node scripts/bundle.mjs
+          next=$(( $(git rev-list --count HEAD) + 1 ))
+          node scripts/bundle.mjs --build "$next" --url http://127.0.0.1:8300/liquid-agent.tar.gz --out release-next
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: release/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-next
+          path: release-next/
+          if-no-files-found: error
 
   desktop:
     name: Linux desktop tools (X11)
@@ -43,7 +72,8 @@ jobs:
             node scripts/desktop-check.mjs'
 
   install:
-    name: One-line install on ${{ matrix.image }}
+    name: One-line install and self-update on ${{ matrix.image }}
+    needs: bundle
     strategy:
       fail-fast: false
       matrix:
@@ -56,15 +86,34 @@ jobs:
           if command -v apt-get >/dev/null; then apt-get update && apt-get install -y curl ca-certificates tar gzip procps
           else dnf install -y curl tar gzip procps-ng findutils gawk; fi
       - uses: actions/checkout@v4
-      - name: Run install.sh from this commit; it starts, has an app menu entry and a command
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle
+          path: /tmp/bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle-next
+          path: /tmp/next
+      - name: Run install.sh with this commit's bundle; it starts, has an app menu entry and a command
         run: |
-          tar -czf /tmp/source.tar.gz --transform 's,^\.,liquid-agent,' --exclude=./.git .
-          LIQUID_AGENT_SOURCE=/tmp/source.tar.gz bash install.sh
+          LIQUID_AGENT_BUNDLE=/tmp/bundle/liquid-agent.tar.gz LIQUID_AGENT_UPDATE_URL=http://127.0.0.1:8300/latest.json bash install.sh
           for i in $(seq 1 60); do curl -fs http://127.0.0.1:8170/healthz && break; sleep 1; done
           curl -fs http://127.0.0.1:8170/healthz | grep -q liquid-agent
           test -f "$HOME/.local/share/applications/liquid-agent.desktop"
           test -x "$HOME/.local/bin/liquid-agent"
           test -x "$HOME/.liquid-agent/node/bin/node"
+      - name: It updates itself to a newer build and comes back up
+        run: |
+          node="$HOME/.liquid-agent/node/bin/node"
+          next="$("$node" -p 'require("/tmp/next/latest.json").build')"
+          (cd /tmp/next && "$node" -e 'const fs = require("fs"); require("http").createServer((q, s) => fs.createReadStream("." + q.url).on("error", () => { s.statusCode = 404; s.end(); }).pipe(s)).listen(8300, "127.0.0.1")' &)
+          sleep 1
+          token="$(curl -fs http://127.0.0.1:8170/ | grep -o 'liquid-token" content="[^"]*' | cut -d'"' -f3)"
+          curl -fs -X POST -H "X-Liquid-Token: $token" http://127.0.0.1:8170/api/update/check | grep -q '"state":"ready"'
+          curl -fs -X POST -H "X-Liquid-Token: $token" http://127.0.0.1:8170/api/update/apply
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:8170/healthz | grep -q "\"build\":$next" && break; sleep 1; done
+          curl -fs http://127.0.0.1:8170/healthz | grep -q "\"build\":$next"
+          test ! -e "$HOME/.liquid-agent/app.old"
           "$HOME/.local/bin/liquid-agent" stop
       - if: failure()
         run: cat "$HOME/.local/share/liquid-agent/logs/"*.log || true
@@ -114,3 +163,28 @@ jobs:
       - name: Install Auto 200M and Betterwright and start them
         run: node scripts/smoke.mjs --helpers
         timeout-minutes: 40
+
+  release:
+    name: Publish the build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, desktop, install]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle
+          path: release
+      - name: Publish it as the latest release, which installed copies update to
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          build="$(node -p 'require("./release/latest.json").build')"
+          if gh release view "build-$build" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "build-$build is already out."
+            exit 0
+          fi
+          gh release create "build-$build" release/liquid-agent.tar.gz release/latest.json \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Build $build" --notes "$NOTES" --latest

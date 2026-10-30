@@ -16,6 +16,7 @@ import { cancelReminder, reminderList } from "./tools.js";
 import { MAX_UPLOAD, uploads } from "./uploads.js";
 import { speak, transcribe } from "./omni.js";
 import { handleVoice } from "./voice.js";
+import { BUILD, updater } from "./updater.js";
 
 const PORT = Number(process.env.LIQUID_AGENT_PORT ?? 8170);
 const HOST = "127.0.0.1";
@@ -97,6 +98,7 @@ function snapshot() {
     activity: agent.activity.slice(0, 200),
     reminders: reminderList(),
     dataDir: DATA,
+    update: updater.snapshot,
   };
 }
 
@@ -106,6 +108,9 @@ const routes = [];
 const route = (method, pattern, handler) => routes.push({ method, pattern: new RegExp(`^${pattern}$`), handler });
 
 route("GET", "/api/state", () => snapshot());
+route("GET", "/api/ping", () => ({ ok: true }));
+route("POST", "/api/update/check", () => updater.check());
+route("POST", "/api/update/apply", () => updater.apply());
 
 route("POST", "/api/chats", async (req) => {
   const { text, attachments } = await json(req);
@@ -142,13 +147,13 @@ route("POST", "/api/uploads", async (req) => {
 
 route("POST", "/api/transcribe", async (req) => {
   const wav = await body(req, MAX_UPLOAD);
-  if (!backends.running("omni")) throw new HttpError(503, "Dictation needs Eyes and ears (LFM3 Omni 2B).");
+  if (!backends.running("omni")) throw new HttpError(503, "Dictation needs Eyes and ears. Set it up in Settings → Downloads.");
   return { text: await transcribe(wav) };
 });
 
 route("POST", "/api/speak", async (req, _, res) => {
   const { text, voice } = await json(req);
-  if (!backends.running("omni")) throw new HttpError(503, "Reading aloud needs Eyes and ears (LFM3 Omni 2B).");
+  if (!backends.running("omni")) throw new HttpError(503, "Reading aloud needs Eyes and ears. Set it up in Settings → Downloads.");
   const audio = await speak(String(text ?? "").slice(0, 1200), voice === "male" ? "male" : voice === "female" ? "female" : settings.voice);
   res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": audio.length, "Cache-Control": "no-store" });
   res.end(audio);
@@ -194,7 +199,7 @@ route("DELETE", "/api/memory/(\\d+)", (_, [i]) => {
 });
 route("DELETE", "/api/memory", () => memory.clear());
 route("POST", "/api/ideas/refresh", async () => {
-  if (!backends.running("small")) throw new HttpError(503, "Ideas need the Everyday brain (LFM3 1.7B).");
+  if (!backends.running("small")) throw new HttpError(503, "Ideas need the Everyday brain. Set it up in Settings → Downloads.");
   return memory.refreshIdeas();
 });
 
@@ -293,7 +298,7 @@ function serveStatic(res, url) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
-  if (url.pathname === "/healthz") return send(res, 200, { app: "liquid-agent" });
+  if (url.pathname === "/healthz") return send(res, 200, { app: "liquid-agent", build: BUILD?.build ?? null });
   const isApi = url.pathname.startsWith("/api/");
   if (!trusted(req, url, { needToken: isApi })) return send(res, isApi ? 401 : 403, { error: "Not allowed." });
   try {
@@ -348,6 +353,7 @@ server.listen(PORT, HOST, () => {
     .catch(() => {})
     .finally(() => backends.resume());
   memory.tidy();
+  updater.start(shutdown);
 });
 
 let stopping = false;

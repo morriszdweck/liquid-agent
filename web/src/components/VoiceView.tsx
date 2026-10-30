@@ -186,12 +186,12 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     return (
       <div className="page">
         <TopBar title="Voice chat" />
-        <Empty icon={waking ? <Spinner size={22} /> : <AudioLines size={22} />} title={waking ? "Waking up Omni…" : "Voice chat needs Eyes and ears"}>
+        <Empty icon={waking ? <Spinner size={22} /> : <AudioLines size={22} />} title={waking ? "Getting voice ready…" : "Voice chat needs Eyes and ears"}>
           {waking ? (
-            "LFM3 Omni 2B is loading. This takes a few seconds."
+            "This takes a few seconds."
           ) : (
             <>
-              Voice uses LFM3 Omni 2B, which listens and talks on your {DEVICE}. Nothing leaves it.
+              Voice chat listens and talks on your {DEVICE}. Nothing leaves it.
               <button className="btn primary" onClick={() => useStore.setState({ settingsOpen: "downloads" })}>
                 Set it up
               </button>
@@ -206,7 +206,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
 
   return (
     <div className="page voice">
-      <TopBar title="Voice chat" right={<span className="pill pill-muted">LFM3 Omni 2B · on this {DEVICE}</span>} />
+      <TopBar title="Voice chat" right={<span className="pill pill-muted">On this {DEVICE}</span>} />
       <div className="voice-stage">
         <div ref={orb} className={cx("orb", `phase-${phase}`, muted && "muted")}>
           <div className="orb-glow" />

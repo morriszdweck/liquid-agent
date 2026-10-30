@@ -1442,11 +1442,6 @@ input[type="range"] {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.thoughts-body.peek {
-  max-height: 4.8em;
-  overflow: hidden;
-  mask-image: linear-gradient(to bottom, transparent, #000 40%);
-}
 .thoughts.open .thoughts-body {
   max-height: 420px;
   overflow: auto;
@@ -1768,49 +1763,34 @@ input[type="range"] {
   opacity: 0.3;
   cursor: default;
 }
-.composer-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 6px 0;
-}
-.foot-btn {
+/* The permissions picker, sitting in the message box beside the + button. */
+.mode-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px;
+  gap: 7px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px 0 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 18px;
   background: none;
   color: var(--fg-2);
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
 }
-.foot-btn:hover,
-.foot-btn.active {
-  background: var(--hover);
+.mode-btn > svg {
+  flex: none;
+}
+.mode-btn > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mode-btn:hover,
+.mode-btn.active {
+  background: var(--hover-strong);
   color: var(--fg);
-}
-.foot-btn.on {
-  color: var(--accent);
-}
-.foot-btn.on:hover {
-  background: var(--accent-soft);
-}
-/* LFM3 Omni 2B can't think, so the button rests while Omni is answering. */
-.foot-btn.unavailable {
-  opacity: 0.4;
-  cursor: default;
-}
-.foot-btn.unavailable:hover {
-  background: none;
-  color: var(--fg-2);
-}
-.foot-model {
-  margin-left: auto;
-  color: var(--fg-3);
-  font-size: 12px;
 }
 
 .attachments {

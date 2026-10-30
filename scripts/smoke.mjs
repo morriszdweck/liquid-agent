@@ -165,7 +165,7 @@ check(state.dataDir === home, "it keeps its files in the data folder it was give
 check(state.routines.length > 0, "starter routines are there");
 
 if (MODELS) {
-  await call("PATCH", "/api/settings", { smallQuant: "QAD-Q4_0", reasoning: false });
+  await call("PATCH", "/api/settings", { smallQuant: "QAD-Q4_0" });
   await call("POST", "/api/parts/install", { ids: ["engine", "small"] });
   await waitFor("LFM3 1.7B", (s) => s.parts.find((p) => p.id === "small" && p.status === "running"), 30);
   const engine = (await call("GET", "/api/state")).parts.find((p) => p.id === "engine");

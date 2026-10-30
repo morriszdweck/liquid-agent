@@ -4,8 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh | bash
 #
 # Works on macOS and on Linux (x86_64 or arm64). The app goes in ~/.liquid-agent,
-# with its own copy of Node.js if this computer has none new enough. It adds
-# "Liquid Agent" to ~/Applications (macOS) or the app menu (Linux) and a
+# with its own copy of Node.js if this computer has none new enough. It comes
+# ready to run (no npm or build step) and keeps itself up to date after this.
+# It adds "Liquid Agent" to ~/Applications (macOS) or the app menu (Linux) and a
 # `liquid-agent` command, then opens the setup screen in your browser. Models
 # are downloaded from there.
 set -euo pipefail
@@ -92,24 +93,23 @@ fi
 
 step "Downloading the app"
 tmp="$(mktemp -d)"
-if [ -n "${LIQUID_AGENT_SOURCE:-}" ]; then
-  tar -xzf "$LIQUID_AGENT_SOURCE" -C "$tmp" # a local tarball, for testing
+if [ -n "${LIQUID_AGENT_BUNDLE:-}" ]; then
+  cp "$LIQUID_AGENT_BUNDLE" "$tmp/app.tar.gz" # a local bundle, for testing
 else
-  curl -fsSL "https://codeload.github.com/$REPO/tar.gz/refs/heads/$BRANCH" | tar -xz -C "$tmp"
+  # Every push to main publishes a ready-to-run bundle, so nothing is built here.
+  curl -fsSL "https://github.com/$REPO/releases/latest/download/latest.json" -o "$tmp/latest.json" ||
+    fail "Couldn't reach GitHub to download Liquid Agent. Check your connection and try again."
+  url="$("$NODE" -p 'require(process.argv[1]).url' "$tmp/latest.json")"
+  expected="$("$NODE" -p 'require(process.argv[1]).sha256' "$tmp/latest.json")"
+  curl -fsSL "$url" -o "$tmp/app.tar.gz" || fail "The download didn't finish. Try again."
+  [ "$(sha256 "$tmp/app.tar.gz")" = "$expected" ] || fail "The download didn't match its checksum. Try again."
 fi
-src="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
-[ -f "$src/server/index.js" ] || fail "That download doesn't look like Liquid Agent."
-rm -rf "$ROOT/app.old"
+tar -xzf "$tmp/app.tar.gz" -C "$tmp"
+[ -f "$tmp/liquid-agent/server/index.js" ] && [ -f "$tmp/liquid-agent/build.json" ] || fail "That download doesn't look like Liquid Agent."
+rm -rf "$ROOT/app.old" "$ROOT/app.next" "$ROOT/app.download" "$ROOT/app.bad"
 [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.old"
-mv "$src" "$ROOT/app"
+mv "$tmp/liquid-agent" "$ROOT/app"
 rm -rf "$tmp" "$ROOT/app.old"
-
-step "Installing its parts (about a minute)"
-cd "$ROOT/app"
-npm ci --no-audit --no-fund --loglevel=error >"$DATA/logs/install.log" 2>&1 || fail "Installing failed. Details: $DATA/logs/install.log"
-step "Building the app"
-npm run build --silent >>"$DATA/logs/install.log" 2>&1 || fail "Building failed. Details: $DATA/logs/install.log"
-npm prune --omit=dev --no-audit --no-fund --loglevel=error >>"$DATA/logs/install.log" 2>&1 || true
 
 # ---- Ways to open it ----
 
@@ -118,7 +118,7 @@ cat >"$ROOT/bin/liquid-agent" <<EOF
 # Opens Liquid Agent, starting it in the background if needed.
 #   liquid-agent          open it
 #   liquid-agent stop     stop it and its models
-#   liquid-agent update   get the newest version
+#   liquid-agent update   get the newest version now (it also updates by itself)
 #   liquid-agent logs     show what it printed
 ROOT="$ROOT"
 DATA="$DATA"
@@ -163,7 +163,7 @@ if [ "$OS" = "Darwin" ]; then
   osacompile -o "$APP" -e "do shell script quoted form of \"$ROOT/bin/liquid-agent\"" >/dev/null 2>&1 || true
   if [ -d "$APP" ]; then
     # Give it the Liquid Agent icon; a plain one is fine if this doesn't work.
-    osascript -l JavaScript -e "ObjC.import('AppKit'); const img = \$.NSImage.alloc.initWithContentsOfFile('$ROOT/app/web/public/icon.svg'); if (img && img.isValid) \$.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$APP', 0);" >/dev/null 2>&1 || true
+    osascript -l JavaScript -e "ObjC.import('AppKit'); const img = \$.NSImage.alloc.initWithContentsOfFile('$ROOT/app/web/dist/icon.svg'); if (img && img.isValid) \$.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$APP', 0);" >/dev/null 2>&1 || true
   fi
   WHERE="Applications or Spotlight"
 else
@@ -176,7 +176,7 @@ Type=Application
 Name=Liquid Agent
 Comment=A private AI agent that runs on this computer
 Exec="$ROOT/bin/liquid-agent"
-Icon=$ROOT/app/web/public/icon.svg
+Icon=$ROOT/app/web/dist/icon.svg
 Terminal=false
 Categories=Utility;
 EOF

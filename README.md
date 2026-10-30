@@ -6,7 +6,7 @@ A private AI agent for your Mac or Linux computer that runs **LFM3 1.7B** and **
 - **Does things on your computer**: runs commands, reads and writes files, searches and reads the web, opens apps and links, sets reminders, uses the clipboard, and clicks around websites with [Betterwright](https://www.npmjs.com/package/betterwright).
 - **Voice chat** with LFM3 Omni 2B: it listens, thinks and talks back in one model. Talk over it to interrupt.
 - **Omni where it matters**: dictation, reading answers aloud, pictures, audio and your screen all go through LFM3 Omni 2B. Everyday text and documents go to LFM3 1.7B. The app picks the model for you.
-- **Thinks first**: LFM3 1.7B reasons before it answers (turn it off with **Think** under the message box). LFM3 Omni 2B is a non-reasoning model, so pictures and audio are answered right away.
+- **Thinks first**: LFM3 1.7B reasons before every answer. The reasoning stays folded away; tap **Thinking for a better answer…** to read it. LFM3 Omni 2B is a non-reasoning model, so pictures and audio are answered right away.
 - **Three safety modes**: *Ask for Approval*, *Approve for Me* and *Full Auto*. Approve for Me needs the [Auto 200M INT4](https://huggingface.co/ProCreations/auto-200m-2-int4) classifier, which approves safe actions and asks you about the rest; picking it downloads Auto 200M first. Commands that could wipe data always ask.
 - **Memory and For You**: it learns small facts about you, uses only the relevant ones (to keep prompts short) and suggests ideas based on them.
 - **Routines** you can run with one click or on a schedule, and an **Activity** log of every action and who approved it.
@@ -22,13 +22,15 @@ Paste this into Terminal on macOS, or a terminal on Linux:
 curl -fsSL https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh | bash
 ```
 
-It installs the app in `~/.liquid-agent` (with a private copy of Node.js if you don't have one), adds **Liquid Agent** to your Applications folder (or app menu on Linux) and a `liquid-agent` command, then opens the setup screen in your browser at <http://127.0.0.1:8170>. Pick what to download and a model size there; that's it.
+It installs a ready-to-run copy in `~/.liquid-agent` (no npm or build step, and a private copy of Node.js if you don't have one), adds **Liquid Agent** to your Applications folder (or app menu on Linux) and a `liquid-agent` command, then opens the setup screen in your browser at <http://127.0.0.1:8170>. Pick what to download and a model size there; that's it.
 
-Afterwards, open it from Applications, Spotlight or your app menu, or with `liquid-agent`. `liquid-agent update` gets the newest version, `liquid-agent stop` stops it.
+Afterwards, open it from Applications, Spotlight or your app menu, or with `liquid-agent`. `liquid-agent stop` stops it.
+
+It keeps itself up to date: every push to `main` is published as a release, new versions download in the background and go in when nothing is running, and if one doesn't start the previous version comes back. Turn this off in Settings → General; `liquid-agent update` gets the newest version right away.
 
 Requirements: an Apple silicon Mac with macOS 14 or later, or a 64-bit Linux computer (see [Linux](#linux)), and about 4 GB of free space for everything (1.1 GB for text chat only).
 
-From a clone instead: double-click **Liquid Agent.command** on macOS, run `scripts/start.sh`, or run `npm ci && npm run build && npm start` (Node.js 22 or newer).
+From a clone instead (it won't update itself; use `git pull`): double-click **Liquid Agent.command** on macOS, run `scripts/start.sh`, or run `npm ci && npm run build && npm start` (Node.js 22 or newer).
 
 ## Linux
 
@@ -88,6 +90,7 @@ npm ci
 npm run dev        # rebuilds the UI and restarts the server on changes
 npm run typecheck
 npm test           # starts the server and checks its API
+node scripts/bundle.mjs --build 1   # packs release/liquid-agent.tar.gz and latest.json, as CI does for releases
 ```
 
 ## License
