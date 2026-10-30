@@ -11,6 +11,7 @@ import {
   Eye,
   FolderOpen,
   Globe,
+  Link2,
   Monitor,
   Moon,
   Play,
@@ -26,7 +27,7 @@ import {
 import { api } from "../api";
 import { speak, stopSpeaking } from "../audio/speak";
 import { errorToast, toast, useStore } from "../store";
-import type { Part, Settings as SettingsType } from "../types";
+import type { ModelResolution, Part, Settings as SettingsType } from "../types";
 import { DEVICE, IS_MAC, cx, timeAgo } from "../util";
 import { MODES, modeNote } from "./Composer";
 import { Logo } from "./Sidebar";
@@ -274,6 +275,7 @@ function Safety({ settings }: { settings: SettingsType }) {
 
 export function PartRow({ part }: { part: Part }) {
   const busy = useStore((s) => s.busy);
+  const [customOpen, setCustomOpen] = useState(false);
   const act = (path: string, body?: unknown) => api("POST", path, body).catch(errorToast);
   const changing = busy || part.status === "installing" || part.status === "starting";
   const tone = part.status === "running" ? "ok" : part.status === "failed" ? "bad" : part.status === "installing" || part.status === "starting" ? "busy" : "off";
@@ -286,6 +288,10 @@ export function PartRow({ part }: { part: Part }) {
     failed: part.error || "Something went wrong",
   }[part.status];
   const note = part.queued && part.status !== "installing" ? "Waiting its turn…" : part.live ? `${label} · the current size keeps working meanwhile` : label;
+  const useBuiltIn = () => {
+    if (!confirm(`Stop using ${part.custom?.label ?? "this model"}? Its download will be removed and the built-in LFM3 1.7B will be used.`)) return;
+    api("DELETE", "/api/models/custom").catch(errorToast);
+  };
 
   return (
     <div className={cx("part", `status-${part.status}`)}>
@@ -303,10 +309,15 @@ export function PartRow({ part }: { part: Part }) {
               value={part.quant}
               disabled={changing}
               title={changing ? "Wait for the current download to finish" : undefined}
-              onChange={(e) => patch({ [`${part.id}Quant`]: e.target.value } as Partial<SettingsType>)}
+              onChange={(e) =>
+                part.custom
+                  ? api("POST", "/api/models/custom/quant", { file: e.target.value }).catch(errorToast)
+                  : patch({ [`${part.id}Quant`]: e.target.value } as Partial<SettingsType>)
+              }
             >
               {part.quants.map((q) => (
                 <option key={q.id} value={q.id}>
+                  {q.quant ? `${q.quant} · ` : ""}
                   {q.label} · {q.size}
                   {q.note ? ` · ${q.note}` : ""}
                   {q.onDisk ? " ✓" : ""}
@@ -314,6 +325,28 @@ export function PartRow({ part }: { part: Part }) {
               ))}
             </select>
           </label>
+        )}
+        {part.id === "small" && (
+          <div className="part-custom">
+            {part.custom ? (
+              <>
+                <span className="muted small">
+                  huggingface.co/{part.custom.repo}
+                  {part.custom.license ? ` · ${part.custom.license}` : ""}
+                </span>
+                <button className="btn" disabled={changing} onClick={() => setCustomOpen(true)}>
+                  <Link2 size={13} /> Change model
+                </button>
+                <button className="btn" disabled={changing} onClick={useBuiltIn}>
+                  Use built-in
+                </button>
+              </>
+            ) : (
+              <button className="btn" disabled={changing} onClick={() => setCustomOpen(true)}>
+                <Link2 size={13} /> Use a model from Hugging Face
+              </button>
+            )}
+          </div>
         )}
         <div className={cx("part-status", part.status === "failed" && "bad")}>
           <StatusDot tone={part.queued ? "busy" : tone} /> {note}
@@ -342,7 +375,7 @@ export function PartRow({ part }: { part: Part }) {
           </button>
         )}
         {part.status === "installing" && <button className="btn" onClick={() => act("/api/parts/cancel")}>Cancel</button>}
-        {(part.status === "installed" || part.status === "running" || part.status === "failed") && (
+        {(part.status === "installed" || part.status === "running" || part.status === "failed") && !(part.id === "small" && part.custom) && (
           <button
             className="icon-btn"
             title="Remove download"
@@ -353,7 +386,108 @@ export function PartRow({ part }: { part: Part }) {
           </button>
         )}
       </div>
+      {customOpen && <CustomModelModal part={part} onClose={() => setCustomOpen(false)} />}
     </div>
+  );
+}
+
+function CustomModelModal({ part, onClose }: { part: Part; onClose: () => void }) {
+  const [link, setLink] = useState(part.custom ? `https://huggingface.co/${part.custom.repo}` : "");
+  const [result, setResult] = useState<ModelResolution | null>(null);
+  const [selected, setSelected] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const find = async () => {
+    if (!link.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    setResult(null);
+    try {
+      const found = await api<ModelResolution>("POST", "/api/models/resolve", { link: link.trim() });
+      setResult(found);
+      setSelected(found.requested ?? found.recommended);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const add = async () => {
+    if (!result || !selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api("POST", "/api/models/custom", { link: link.trim(), file: selected });
+      toast("Downloading the model. It will start answering when it's ready.");
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={part.custom ? "Change the Everyday brain" : "Add a model from Hugging Face"}
+      onClose={onClose}
+      wide
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={!result || !selected || busy} onClick={add}>
+            <Download size={14} /> Use this model
+          </button>
+        </>
+      }
+    >
+      <p className="muted">
+        Paste a model link from huggingface.co. Liquid Agent finds its GGUF files, checks the header and runs it on this {DEVICE}. It replaces the built-in LFM3 1.7B for chat.
+      </p>
+      <label className="field">
+        <span>Hugging Face link</span>
+        <input
+          value={link}
+          onChange={(e) => {
+            setLink(e.target.value);
+            setResult(null);
+            setSelected("");
+          }}
+          onKeyDown={(e) => e.key === "Enter" && find()}
+          placeholder="https://huggingface.co/org/model"
+          autoFocus
+        />
+      </label>
+      <div className="h3-row">
+        <span className="muted small">Public models work right away. For a private or gated model, accept its terms and set HF_TOKEN before starting Liquid Agent.</span>
+        <button className="btn" disabled={!link.trim() || busy} onClick={find}>
+          {busy ? "Looking…" : "Find sizes"}
+        </button>
+      </div>
+      {error && <div className="notice bad">{error}</div>}
+      {result && (
+        <>
+          <Row title={result.label} detail={`${result.repo}${result.gated ? " · gated" : ""}`}>
+            <a className="btn" href={result.licenseUrl ?? `https://huggingface.co/${result.repo}`} target="_blank" rel="noreferrer">
+              {result.license ? `License: ${result.license}` : "Model page"}
+            </a>
+          </Row>
+          <Row title="Size" detail="Recommended fits this computer's memory. Larger sizes answer better but take more space.">
+            <select className="input" value={selected} onChange={(e) => setSelected(e.target.value)}>
+              {result.variants.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label} · {v.quant} · {v.size}
+                </option>
+              ))}
+            </select>
+          </Row>
+          {result.warning && <div className="notice">{result.warning}</div>}
+        </>
+      )}
+    </Modal>
   );
 }
 
@@ -402,7 +536,7 @@ function Advanced({ settings }: { settings: SettingsType }) {
       <Row title="Most steps per answer">
         <SavedInput type="number" width={110} value={String(settings.maxSteps)} onSave={num("maxSteps", 1, 20)} />
       </Row>
-      <Row title="Creativity" detail={`Temperature ${settings.temperature.toFixed(2)} for LFM3 1.7B.`}>
+      <Row title="Creativity" detail={`Temperature ${settings.temperature.toFixed(2)} for the everyday brain.`}>
         <input type="range" min={0} max={1} step={0.05} value={settings.temperature} onChange={(e) => patch({ temperature: Number(e.target.value) })} />
       </Row>
       <Row title="Delete all chats" detail="Removes every conversation and the files you added. Memory stays.">

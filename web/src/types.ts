@@ -63,9 +63,38 @@ export type Part = {
   live?: boolean;
   quant?: string;
   quants?: Quant[];
+  /** Set on the Everyday brain when it was added from Hugging Face. */
+  custom?: CustomModel;
 };
 
-export type Quant = { id: string; label: string; bytes: number; size: string; note?: string; onDisk: boolean };
+export type Quant = { id: string; label: string; quant?: string; bytes: number; size: string; note?: string; onDisk?: boolean };
+
+export type CustomVariant = Quant & { file: string; quant: string; shards: string[]; recommended?: boolean };
+
+export type CustomModel = {
+  repo: string;
+  revision: string;
+  label: string;
+  license?: string | null;
+  licenseUrl?: string | null;
+  file: string;
+  quant: string;
+  bytes: number;
+  meta?: { architecture?: string | null; contextLength?: number | null; hasTemplate?: boolean; thinking?: boolean; name?: string | null } | null;
+};
+
+export type ModelResolution = {
+  repo: string;
+  revision: string;
+  label: string;
+  license?: string | null;
+  licenseUrl?: string | null;
+  gated: boolean;
+  variants: CustomVariant[];
+  recommended: string;
+  requested?: string | null;
+  warning?: string;
+};
 
 export type ApprovalMode = "askAlways" | "approveForMe" | "fullAuto";
 

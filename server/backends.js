@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { DATA, DEVICE, DIRS, IS_MAC, QUANTS, ROOT, bus, bytesText, load, run, save, settings, sleep } from "./core.js";
+import { hfHeaders, modelError, probeGGUF, resolveHfModel } from "./models.js";
 import { linuxGPU, listeners } from "./platform.js";
 
 export const PARTS = {
@@ -52,6 +53,8 @@ const GGUF = {
 const OMNI_PROJECTOR = { file: "mmproj-LFM3-Omni-2B-Q8_0.gguf", bytes: 0.54e9 };
 const quantOf = (id) => QUANTS[id].find((q) => q.id === settings[`${id}Quant`]) ?? QUANTS[id][1];
 const weightsFile = (id) => `${GGUF[id].prefix}${quantOf(id).id}.gguf`;
+const CUSTOM_FILE = "custom-model.json";
+const CUSTOM_DIR = path.join(DIRS.models, "custom");
 
 const ARCH = process.arch === "arm64" ? "arm64" : "x64";
 
@@ -97,6 +100,69 @@ const weights = (id) => model(weightsFile(id));
 const gb = (bytes) => `${(bytes / 1e9).toFixed(1)} GB`;
 const marker = (dir) => path.join(dir, ".ready");
 
+const isGguf = (name) => typeof name === "string" && /\.gguf$/i.test(name) && name.split("/").every((part) => part && part !== "." && part !== "..");
+const customPath = (name) => {
+  if (!isGguf(name)) throw modelError("That model file has an unsafe name.", 400);
+  const full = path.join(CUSTOM_DIR, name);
+  if (!full.startsWith(CUSTOM_DIR + path.sep)) throw modelError("That model file has an unsafe name.", 400);
+  return full;
+};
+const variantOf = (custom) => custom?.variants?.find((v) => v.id === custom.file) ?? null;
+const variantOnDisk = (variant) => Boolean(variant) && variant.shards.every((shard) => fs.existsSync(customPath(shard)));
+
+/** Keeps a saved custom model from doing anything unexpected after a restart. */
+function cleanCustom(raw) {
+  if (!raw || typeof raw !== "object" || typeof raw.repo !== "string" || typeof raw.file !== "string" || !Array.isArray(raw.variants)) return null;
+  const variants = raw.variants
+    .filter((v) => v && typeof v.id === "string" && typeof v.file === "string" && Array.isArray(v.shards) && v.shards.length > 0 && v.shards.every(isGguf) && typeof v.bytes === "number")
+    .slice(0, 100)
+    .map((v) => ({
+      id: v.id,
+      file: v.file,
+      quant: typeof v.quant === "string" ? v.quant : "GGUF",
+      bytes: v.bytes,
+      shards: v.shards,
+      shardBytes: Array.isArray(v.shardBytes) ? v.shardBytes.filter((n) => typeof n === "number") : undefined,
+      label: typeof v.label === "string" ? v.label : "Balanced",
+      ...(typeof v.note === "string" ? { note: v.note } : {}),
+    }));
+  const selected = variants.find((v) => v.id === raw.file);
+  if (!variants.length || !selected) return null;
+  return {
+    ...selected,
+    repo: raw.repo,
+    revision: typeof raw.revision === "string" ? raw.revision : "main",
+    label: typeof raw.label === "string" ? raw.label : raw.repo.split("/").pop(),
+    license: typeof raw.license === "string" ? raw.license : null,
+    licenseUrl: typeof raw.licenseUrl === "string" ? raw.licenseUrl : null,
+    addedAt: typeof raw.addedAt === "number" ? raw.addedAt : Date.now(),
+    variants,
+    meta: raw.meta && typeof raw.meta === "object" ? raw.meta : null,
+  };
+}
+
+/** Deletes every custom model file except the ones the chosen size needs. */
+function pruneCustom(keep) {
+  const keepSet = new Set(keep.map((name) => path.resolve(customPath(name))));
+  const walk = (dir) => {
+    let children = [];
+    try {
+      children = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const child of children) {
+      const full = path.join(dir, child.name);
+      if (child.isDirectory()) walk(full);
+      else if (!keepSet.has(path.resolve(full))) fs.rmSync(full, { force: true });
+    }
+    try {
+      if (dir !== CUSTOM_DIR && !fs.readdirSync(dir).length) fs.rmdirSync(dir);
+    } catch {}
+  };
+  walk(CUSTOM_DIR);
+}
+
 /** Finds the llama-server inside the app's own engine folder. */
 function findEngine() {
   const stack = [DIRS.engine];
@@ -118,15 +184,18 @@ function findEngine() {
 }
 
 /** Streams a file to disk with progress, resuming a partial download when the server allows it. */
-async function download(url, dest, { onProgress, signal } = {}) {
+async function download(url, dest, { onProgress, signal, headers } = {}) {
   const part = dest + ".part";
   let start = fs.existsSync(part) ? fs.statSync(part).size : 0;
-  const res = await fetch(url, { signal, headers: start ? { Range: `bytes=${start}-` } : {} });
+  const res = await fetch(url, { signal, headers: { ...headers, ...(start ? { Range: `bytes=${start}-` } : {}) } });
   if (res.status === 416) {
     fs.renameSync(part, dest);
     return;
   }
-  if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}). Check your internet and try again.`);
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new Error("This model is private or gated. Accept its terms on Hugging Face, or set HF_TOKEN and restart Liquid Agent.");
+    throw new Error(`Download failed (HTTP ${res.status}). Check your internet and try again.`);
+  }
   if (res.status !== 206) start = 0;
   const total = start + (Number(res.headers.get("content-length")) || 0);
   const file = fs.createWriteStream(part, { flags: start ? "a" : "w" });
@@ -168,6 +237,8 @@ class Backends {
   readyHooks = [];
   /** The GPU build failed to start a model, so models run on the CPU until the app restarts. */
   cpuOnly = false;
+  /** A model someone added from Hugging Face; it replaces the Everyday brain when set. */
+  custom = cleanCustom(load(CUSTOM_FILE, null));
 
   constructor() {
     this.refresh();
@@ -199,6 +270,36 @@ class Backends {
     return ORDER.map((id) => {
       const part = { id, ...PARTS[id], ...this.states[id], queued: this.queued.has(id) || (this.plan.has(id) && this.states[id]?.status === "missing") };
       if (id === "engine") return { ...part, ...this.engineInfo };
+      if (id === "small" && this.custom) {
+        const custom = this.custom;
+        return {
+          ...part,
+          detail: `${custom.label} · ${custom.repo}${custom.meta?.hasTemplate === false ? " · no chat template" : ""}`,
+          size: gb(custom.bytes),
+          bytes: custom.bytes,
+          quant: custom.file,
+          custom: {
+            repo: custom.repo,
+            revision: custom.revision,
+            label: custom.label,
+            license: custom.license,
+            licenseUrl: custom.licenseUrl,
+            file: custom.file,
+            quant: custom.quant,
+            bytes: custom.bytes,
+            meta: custom.meta,
+          },
+          quants: custom.variants.map((v) => ({
+            id: v.id,
+            label: v.label,
+            quant: v.quant,
+            bytes: v.bytes,
+            size: gb(v.bytes),
+            note: v.note,
+            onDisk: variantOnDisk(v),
+          })),
+        };
+      }
       if (!GGUF[id]) return part;
       const extra = id === "omni" ? OMNI_PROJECTOR.bytes : 0;
       const quant = quantOf(id);
@@ -233,6 +334,7 @@ class Backends {
       case "engine":
         return findEngine() !== null;
       case "small":
+        if (this.custom) return variantOnDisk(variantOf(this.custom));
         return fs.existsSync(weights("small"));
       case "omni":
         return fs.existsSync(weights("omni")) && fs.existsSync(model(OMNI_PROJECTOR.file));
@@ -264,6 +366,105 @@ class Backends {
       if (s === "installing" || s === "starting" || s === "running" || s === "failed") continue;
       this.states[id] = { status: this.onDisk(id) ? "installed" : "missing" };
     }
+  }
+
+  // ---- A model from Hugging Face ----
+
+  /** Looks up a Hugging Face link without downloading or changing anything. */
+  async resolveModel(link) {
+    return resolveHfModel(link, { memoryGB: this.machine.memoryGB });
+  }
+
+  /** Replaces the Everyday brain with a GGUF model from Hugging Face. */
+  async setCustomModel(link, file) {
+    if (this.busy) throw modelError("Wait for the current download to finish, then add the model.", 409);
+    const resolved = await resolveHfModel(link, { memoryGB: this.machine.memoryGB });
+    const wanted = [file, resolved.requested, resolved.recommended].filter(Boolean);
+    const variant = resolved.variants.find((v) => wanted.includes(v.id));
+    if (!variant) throw modelError("Pick one of the sizes Hugging Face offered.", 400);
+    const previous = this.custom;
+    const next = cleanCustom({
+      repo: resolved.repo,
+      revision: resolved.revision,
+      label: resolved.label,
+      license: resolved.license,
+      licenseUrl: resolved.licenseUrl,
+      variants: resolved.variants,
+      file: variant.file,
+      quant: variant.quant,
+      bytes: variant.bytes,
+      shards: variant.shards,
+      shardBytes: variant.shardBytes,
+      addedAt: Date.now(),
+      meta: null,
+    });
+    if (!next) throw modelError("That model's files couldn't be used.", 422);
+    this.stop("small");
+    // A different repo can reuse a file name. Remove the old download so it can't be mistaken for the new one.
+    if (!previous || previous.repo !== resolved.repo || previous.revision !== resolved.revision || previous.file !== variant.file) {
+      fs.rmSync(CUSTOM_DIR, { recursive: true, force: true });
+    }
+    this.custom = next;
+    save(CUSTOM_FILE, this.custom);
+    this.refresh();
+    this.emit();
+    this.install(["small"]).catch(() => {});
+    return this.snapshot().find((p) => p.id === "small");
+  }
+
+  /** Switches to another size of the same custom model. */
+  setCustomQuant(file) {
+    if (this.busy) throw modelError("Wait for the current download to finish, then change the size.", 409);
+    if (!this.custom) throw modelError("Add a model from Hugging Face first.", 400);
+    const variant = this.custom.variants.find((v) => v.id === file);
+    if (!variant) throw modelError("That size isn't available for this model.", 400);
+    if (variant.file === this.custom.file) {
+      if (this.installed("small") && !this.running("small")) this.start("small");
+      return this.snapshot().find((p) => p.id === "small");
+    }
+    this.stop("small");
+    const next = cleanCustom({
+      ...this.custom,
+      file: variant.file,
+      quant: variant.quant,
+      bytes: variant.bytes,
+      shards: variant.shards,
+      shardBytes: variant.shardBytes,
+      meta: null,
+    });
+    if (!next) throw modelError("That size couldn't be used.", 422);
+    this.custom = next;
+    save(CUSTOM_FILE, this.custom);
+    this.refresh();
+    this.emit();
+    this.install(["small"]).catch(() => {});
+    return this.snapshot().find((p) => p.id === "small");
+  }
+
+  /** Goes back to the built-in LFM3 1.7B and deletes the custom download. */
+  clearCustomModel() {
+    if (this.busy) throw modelError("Wait for the current download to finish, then switch back.", 409);
+    if (!this.custom) return this.snapshot().find((p) => p.id === "small");
+    this.stop("small");
+    this.custom = null;
+    fs.rmSync(path.join(DATA, CUSTOM_FILE), { force: true });
+    fs.rmSync(CUSTOM_DIR, { recursive: true, force: true });
+    this.refresh();
+    this.emit();
+    if (this.installed("small")) this.start("small");
+    return this.snapshot().find((p) => p.id === "small");
+  }
+
+  /** Whether Think does anything for this model. */
+  supportsThinking(id) {
+    if (id !== "small") return false;
+    return !this.custom || this.custom.meta?.thinking !== false;
+  }
+
+  /** Tokens the model can hold at once, for sizing an answer. */
+  contextTokens(id) {
+    if (id === "small" && this.custom?.meta?.contextLength) return this.custom.meta.contextLength;
+    return 32768;
   }
 
   // ---- Install ----
@@ -346,6 +547,7 @@ class Backends {
       case "engine":
         return this.installEngine(signal);
       case "small":
+        if (this.custom) return this.installCustom(signal);
         return download(hf(GGUF.small.repo, weightsFile("small")), weights("small"), {
           signal,
           onProgress: this.progress(id, "Downloading"),
@@ -366,6 +568,56 @@ class Backends {
       case "browser":
         return this.installBrowser(signal);
     }
+  }
+
+  /** Downloads every part of a custom model, then checks its GGUF header. */
+  async installCustom(signal) {
+    const custom = this.custom;
+    const variant = variantOf(custom);
+    if (!custom || !variant) throw modelError("No model from Hugging Face is selected.", 400);
+    fs.mkdirSync(CUSTOM_DIR, { recursive: true });
+    for (const shard of variant.shards) fs.mkdirSync(path.dirname(customPath(shard)), { recursive: true });
+    const sizes = variant.shardBytes?.length === variant.shards.length ? variant.shardBytes : variant.shards.map(() => 0);
+    const total = sizes.reduce((sum, n) => sum + n, 0) || variant.bytes || 0;
+    const live = this.states.small?.live === true;
+    const repo = custom.repo.split("/").map(encodeURIComponent).join("/");
+    const revision = encodeURIComponent(custom.revision || "main");
+    let base = 0;
+    for (let i = 0; i < variant.shards.length; i++) {
+      const shard = variant.shards[i];
+      const dest = customPath(shard);
+      const name = shard.split("/").map(encodeURIComponent).join("/");
+      const label = `Downloading ${variant.quant}`;
+      await download(`https://huggingface.co/${repo}/resolve/${revision}/${name}`, dest, {
+        signal,
+        headers: hfHeaders(),
+        onProgress: (done) => {
+          const soFar = base + done;
+          this.set("small", {
+            status: "installing",
+            live,
+            text: total ? `${label} ${bytesText(soFar)} of ${bytesText(total)}` : `${label} ${bytesText(soFar)}`,
+            fraction: total ? Math.min(1, soFar / total) : undefined,
+          });
+        },
+      });
+      base += sizes[i] || fs.statSync(dest).size;
+    }
+    this.set("small", { status: "installing", live, text: "Checking the model…", fraction: 1 });
+    const meta = probeGGUF(customPath(variant.file));
+    const next = cleanCustom({
+      ...custom,
+      file: variant.file,
+      quant: variant.quant,
+      bytes: variant.bytes,
+      shards: variant.shards,
+      shardBytes: variant.shardBytes,
+      meta,
+    });
+    if (!next) throw modelError("That model's files couldn't be used.", 422);
+    this.custom = next;
+    save(CUSTOM_FILE, this.custom);
+    pruneCustom(variant.shards);
   }
 
   /** The engine row's text: what it runs on, and a bigger size for CUDA. */
@@ -494,7 +746,13 @@ class Backends {
         fs.rmSync(DIRS.engine, { recursive: true, force: true });
         break;
       case "small":
-        this.pruneQuants(id, { all: true });
+        if (this.custom) {
+          this.custom = null;
+          fs.rmSync(path.join(DATA, CUSTOM_FILE), { force: true });
+          fs.rmSync(CUSTOM_DIR, { recursive: true, force: true });
+        } else {
+          this.pruneQuants(id, { all: true });
+        }
         break;
       case "omni":
         this.pruneQuants(id, { all: true });
@@ -509,12 +767,12 @@ class Backends {
         fs.mkdirSync(DIRS.bridge, { recursive: true });
         break;
     }
-    this.set(id, { status: "missing" });
+    this.set(id, { status: this.onDisk(id) ? "installed" : "missing" });
   }
 
   /** Deletes this model's other sizes (or all of them), including half-finished downloads. */
   pruneQuants(id, { all = false } = {}) {
-    if (!GGUF[id]) return;
+    if (!GGUF[id] || (id === "small" && this.custom)) return;
     const keep = all ? null : weightsFile(id);
     let names = [];
     try {
@@ -527,7 +785,7 @@ class Backends {
 
   /** Called after the size setting changes: fetches the new size if this model was set up. */
   switchQuant(id) {
-    if (!GGUF[id]) return;
+    if (!GGUF[id] || (id === "small" && this.custom)) return;
     const hadOne = fs.readdirSync(DIRS.models).some((name) => name.startsWith(GGUF[id].prefix) && name.endsWith(".gguf"));
     this.refresh();
     this.emit();
@@ -554,11 +812,18 @@ class Backends {
       case "omni": {
         const server = findEngine();
         if (!server) return null;
-        // Two slots of 16K each: Omni can hold a voice call and transcribe at the same time,
-        // with room for thinking. Each request turns thinking on or off itself.
-        const args = ["--host", "127.0.0.1", "--port", port, "-c", "32768", "-np", "2", "--jinja", "-ngl", "99", "--reasoning", "auto"];
+        const custom = id === "small" ? this.custom : null;
+        const variant = variantOf(custom);
+        if (custom && !variant) return null;
+        const context = custom?.meta?.contextLength ? Math.min(32768, Math.max(512, custom.meta.contextLength)) : 32768;
+        // Omni keeps two slots for a voice call and dictation at the same time. A custom
+        // text model gets one, so its whole context is available to a chat.
+        const slots = custom ? 1 : 2;
+        // Each request turns thinking on or off itself.
+        const args = ["--host", "127.0.0.1", "--port", port, "-c", String(context), "-np", String(slots), "-ngl", "99", "--reasoning", "auto"];
+        if (custom?.meta?.hasTemplate !== false) args.push("--jinja");
         if (this.cpuOnly) args.push("--device", "none");
-        if (id === "small") args.push("-m", weights("small"), "--alias", "LFM3-1.7B");
+        if (id === "small") args.push("-m", custom ? customPath(variant.file) : weights("small"), "--alias", "LFM3-1.7B");
         else args.push("-m", weights("omni"), "--mmproj", model(OMNI_PROJECTOR.file), "--alias", "LFM3-Omni-2B");
         return { cmd: server, args };
       }
@@ -681,6 +946,7 @@ class Backends {
 
 function friendly(e) {
   const text = String(e?.message ?? e);
+  if (/private or gated/.test(text)) return text;
   if (/ENOTFOUND|EAI_AGAIN|fetch failed|ECONNRESET/i.test(text)) return "Couldn't reach the internet. Check your Wi-Fi, then click Try again.";
   if (/ENOSPC/i.test(text)) return `Your ${DEVICE} is out of disk space. Free some space, then click Try again.`;
   return text.slice(0, 300);
@@ -693,6 +959,7 @@ function reasonFromLog(file, port) {
     tail = fs.readFileSync(file, "utf8").slice(-4000).toLowerCase();
   } catch {}
   if (tail.includes("unknown model architecture")) return "The AI engine is too old for this model. Remove the AI engine, then download it again.";
+  if (tail.includes("chat template") || tail.includes("chat_template")) return "This model's GGUF file has no chat template, so it can't answer chat messages. Try another GGUF version of it.";
   if (tail.includes("address already in use") || tail.includes("couldn't bind")) return `Something else is using port ${port}. Quit it, then click Try again.`;
   if (tail.includes("failed to load model") || tail.includes("error loading model")) return "The model file looks damaged. Remove it, then download it again.";
   if (tail.includes("out of memory") || tail.includes("failed to allocate")) return `Your ${DEVICE} ran out of memory. Close some apps, then click Try again.`;

@@ -21,6 +21,7 @@ import { BUILD, updater } from "./updater.js";
 const PORT = Number(process.env.LIQUID_AGENT_PORT ?? 8170);
 const HOST = "127.0.0.1";
 const TOKEN = crypto.randomBytes(24).toString("hex");
+const TOKEN_BYTES = Buffer.from(TOKEN, "utf8");
 const DIST = path.join(ROOT, "web", "dist");
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
 const HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
@@ -51,7 +52,7 @@ async function body(req, limit = 1_000_000) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > limit) throw new HttpError(413, "That file is too big (25 MB at most).");
+    if (size > limit) throw new HttpError(413, `That request is too big (${Math.round(limit / (1024 * 1024))} MB at most).`);
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -73,6 +74,24 @@ function send(res, status, value) {
   res.end(text);
 }
 
+/** Percent-decoding is client input; "%zz" is a bad request, not a server error. */
+function decode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new HttpError(400, "Bad request.");
+  }
+}
+
+/** req.url is untrusted; an absolute-form request ("GET http:// HTTP/1.1") would make `new URL` throw. */
+function urlOf(req) {
+  try {
+    return new URL(req.url, `http://${HOST}:${PORT}`);
+  } catch {
+    return null;
+  }
+}
+
 /** Blocks other websites (and DNS rebinding) from talking to this server. */
 function trusted(req, url, { needToken }) {
   if (!HOSTS.has(req.headers.host ?? "")) return false;
@@ -80,7 +99,10 @@ function trusted(req, url, { needToken }) {
   if (origin && !ORIGINS.has(origin)) return false;
   if (!needToken) return true;
   const token = req.headers["x-liquid-token"] ?? url.searchParams.get("t");
-  return typeof token === "string" && token.length === TOKEN.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(TOKEN));
+  if (typeof token !== "string") return false;
+  // Header and query values arrive as latin1, so compare UTF-8 bytes, not string lengths.
+  const given = Buffer.from(token, "utf8");
+  return given.length === TOKEN_BYTES.length && crypto.timingSafeEqual(given, TOKEN_BYTES);
 }
 
 function snapshot() {
@@ -136,7 +158,7 @@ route("POST", "/api/approvals/([\\w-]+)", async (req, [id]) => {
 });
 
 route("POST", "/api/uploads", async (req) => {
-  const name = decodeURIComponent(String(req.headers["x-file-name"] ?? "file"));
+  const name = decode(String(req.headers["x-file-name"] ?? "file"));
   const data = await body(req, MAX_UPLOAD);
   try {
     return await uploads.add(name, String(req.headers["content-type"] ?? ""), data);
@@ -230,6 +252,19 @@ route("POST", "/api/parts/(\\w+)/start", (_, [id]) => {
   backends.start(id);
 });
 route("POST", "/api/parts/(\\w+)/stop", (_, [id]) => backends.stop(id));
+route("POST", "/api/models/resolve", async (req) => {
+  const { link } = await json(req);
+  return backends.resolveModel(link);
+});
+route("POST", "/api/models/custom", async (req) => {
+  const { link, file } = await json(req);
+  return backends.setCustomModel(link, file);
+});
+route("POST", "/api/models/custom/quant", async (req) => {
+  const { file } = await json(req);
+  return backends.setCustomQuant(file);
+});
+route("DELETE", "/api/models/custom", () => backends.clearCustomModel());
 route("POST", "/api/reveal", async () => {
   try {
     await reveal(DATA);
@@ -250,7 +285,7 @@ async function api(req, res, url) {
     const p = uploads.file(file[1]);
     if (!u || !p) return send(res, 404, { error: "Not found." });
     res.writeHead(200, { "Content-Type": u.mime, "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff" });
-    return fs.createReadStream(p).pipe(res);
+    return pipeFile(res, p);
   }
   for (const r of routes) {
     if (r.method !== req.method) continue;
@@ -265,9 +300,16 @@ async function api(req, res, url) {
 
 // ---- Static web UI ----
 
+/** A file can vanish between the check and the open; a stream error must not take the server down. */
+function pipeFile(res, file) {
+  const stream = fs.createReadStream(file);
+  stream.on("error", () => res.destroy());
+  return stream.pipe(res);
+}
+
 function serveStatic(res, url) {
-  let file = path.normalize(path.join(DIST, decodeURIComponent(url.pathname)));
-  if (!file.startsWith(DIST)) return send(res, 403, { error: "Forbidden." });
+  let file = path.normalize(path.join(DIST, decode(url.pathname)));
+  if (file !== DIST && !file.startsWith(DIST + path.sep)) return send(res, 403, { error: "Forbidden." });
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, "index.html");
   if (!fs.existsSync(file)) {
     res.writeHead(500, { "Content-Type": "text/plain" });
@@ -291,13 +333,14 @@ function serveStatic(res, url) {
     return res.end(html);
   }
   res.writeHead(200, { ...headers, "Cache-Control": url.pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache" });
-  fs.createReadStream(file).pipe(res);
+  pipeFile(res, file);
 }
 
 // ---- Server ----
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${HOST}:${PORT}`);
+  const url = urlOf(req);
+  if (!url) return send(res, 400, { error: "Bad request." });
   if (url.pathname === "/healthz") return send(res, 200, { app: "liquid-agent", build: BUILD?.build ?? null });
   const isApi = url.pathname.startsWith("/api/");
   if (!trusted(req, url, { needToken: isApi })) return send(res, isApi ? 401 : 403, { error: "Not allowed." });
@@ -312,8 +355,8 @@ const server = http.createServer(async (req, res) => {
 
 const sockets = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url, `http://${HOST}:${PORT}`);
-  if (!["/ws", "/voice"].includes(url.pathname) || !req.headers.origin || !trusted(req, url, { needToken: true })) {
+  const url = urlOf(req);
+  if (!url || !["/ws", "/voice"].includes(url.pathname) || !req.headers.origin || !trusted(req, url, { needToken: true })) {
     socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
     return socket.destroy();
   }

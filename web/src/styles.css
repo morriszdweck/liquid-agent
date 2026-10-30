@@ -2874,6 +2874,17 @@ input[type="range"] {
   font-size: 12.5px;
   max-width: 100%;
 }
+.part-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.notice.bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
 .mode-need {
   color: var(--accent);
   font-size: 12px;

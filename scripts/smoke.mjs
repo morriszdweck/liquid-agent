@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
+import { ggufVariants, parseHfLink, probeGGUF } from "../server/models.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.SMOKE_PORT ?? 8199);
@@ -56,6 +57,50 @@ function check(ok, message) {
   if (!ok) fail(message);
   console.log(`✓ ${message}`);
 }
+
+// ---- Hugging Face model reading (no network) ----
+
+const u32 = (n) => {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(n);
+  return b;
+};
+const u64 = (n) => {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(BigInt(n));
+  return b;
+};
+const ggufString = (text) => {
+  const b = Buffer.from(text);
+  return Buffer.concat([u64(b.length), b]);
+};
+const ggufPair = (key, type, body) => Buffer.concat([ggufString(key), u32(type), body]);
+const fixture = Buffer.concat([
+  Buffer.from("GGUF"),
+  u32(3),
+  u64(0),
+  u64(3),
+  ggufPair("general.architecture", 8, ggufString("llama")),
+  ggufPair("llama.context_length", 4, u32(8192)),
+  ggufPair("tokenizer.chat_template", 8, ggufString("{{ enable_thinking }}")),
+]);
+const fixtureFile = path.join(home, "fixture.gguf");
+fs.writeFileSync(fixtureFile, fixture);
+const probe = probeGGUF(fixtureFile);
+check(probe.architecture === "llama" && probe.contextLength === 8192 && probe.thinking, "it reads a GGUF header and finds its context and thinking mode");
+
+const parsed = parseHfLink("https://huggingface.co/org/model/blob/main/dir/model-Q4_K_M.gguf");
+check(parsed.repo === "org/model" && parsed.revision === "main" && parsed.file === "dir/model-Q4_K_M.gguf", "it reads a Hugging Face link to one model file");
+const variants = ggufVariants(
+  [
+    { path: "model-Q4_K_M-00001-of-00002.gguf", size: 10 },
+    { path: "model-Q4_K_M-00002-of-00002.gguf", size: 10 },
+    { path: "model-Q8_0.gguf", size: 20 },
+    { path: "mmproj-model.gguf", size: 5 },
+  ],
+  16,
+);
+check(variants.variants.length === 2 && variants.variants.some((v) => v.shards.length === 2), "it groups split GGUF files and skips projectors");
 
 /** Sends raw bytes and returns the response, for uploads and audio. */
 async function send(route, data, type, headers = {}) {

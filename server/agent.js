@@ -158,7 +158,7 @@ export const agent = {
     return true;
   },
 
-  /** Omni for anything it has to see or hear; the faster 1.7B for everything else. */
+  /** Omni for anything it has to see or hear; the faster text model for everything else. */
   route(chat) {
     const recent = chat.messages.filter((m) => m.role === "user").slice(-2);
     const media = recent.some((m) => m.attachments?.some((a) => a.kind === "image" || a.kind === "audio"));
@@ -215,14 +215,15 @@ export const agent = {
         const thinkStart = Date.now();
         let thinkEnd = 0;
         let thought = "";
-        // LFM3 1.7B always reasons first; LFM3 Omni 2B is a non-reasoning model.
-        const think = route.id === "small";
+        // The built-in brain always reasons first; a custom model only thinks when its template supports it.
+        const think = route.id === "small" && backends.supportsThinking("small");
+        const maxTokens = Math.max(256, Math.min(think ? 6144 : 1536, backends.contextTokens(route.id) - settings.contextBudget));
         for await (const part of stream({
           url: model.url(),
           model: model.id,
           messages: wire,
           temperature: model.temperature(),
-          maxTokens: think ? 6144 : 1536,
+          maxTokens,
           stop: STOPS,
           think,
           signal,
