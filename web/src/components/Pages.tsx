@@ -406,7 +406,7 @@ export function Activity() {
   const activity = useStore((s) => s.activity);
   const [filter, setFilter] = useState<"all" | "auto" | "you" | "blocked">("all");
   const list = activity.filter((a) =>
-    filter === "all" ? true : filter === "auto" ? a.decision?.startsWith("Auto 200M") : filter === "you" ? a.decision?.startsWith("You") : a.ok === false,
+    filter === "all" ? true : filter === "auto" ? a.decision?.startsWith("Auto ") : filter === "you" ? a.decision?.startsWith("You") : a.ok === false,
   );
 
   return (
@@ -425,7 +425,7 @@ export function Activity() {
         {(
           [
             ["all", "Everything"],
-            ["auto", "Approved by Auto 200M"],
+            ["auto", "Approved by Auto 150M"],
             ["you", "Approved by you"],
             ["blocked", "Failed or denied"],
           ] as const
@@ -442,8 +442,8 @@ export function Activity() {
               <ToolIcon tool={a.tool} />
               <span className="list-main">{a.label}</span>
               {a.decision && (
-                <span className={cx("pill", a.ok === false ? "pill-bad" : a.decision.startsWith("Auto 200M") ? "pill-accent" : "pill-muted")}>
-                  {a.decision.startsWith("Auto 200M") && <ShieldCheck size={11} />}
+                <span className={cx("pill", a.ok === false ? "pill-bad" : a.decision.startsWith("Auto ") ? "pill-accent" : "pill-muted")}>
+                  {a.decision.startsWith("Auto ") && <ShieldCheck size={11} />}
                   {a.decision}
                   {a.pDeny !== undefined && ` · ${Math.round((1 - a.pDeny) * 100)}% safe`}
                 </span>

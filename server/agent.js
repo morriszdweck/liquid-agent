@@ -340,10 +340,10 @@ export const agent = {
     emitChat(chat);
     const history = message.steps.filter((x) => x !== step && x.status !== "denied").map((x) => ({ tool: x.tool, args: x.args, result: x.result }));
     const pDeny = await classify(step.tool, step.args, request, history);
-    if (pDeny === null) return ask("Auto 200M isn't ready yet, so I need your OK.");
+    if (pDeny === null) return ask("Auto 150M isn't ready yet, so I need your OK.");
     step.pDeny = Math.round(pDeny * 1000) / 1000;
-    if (pDeny < settings.guardianThreshold) return { approved: true, decision: "Auto 200M approved" };
-    return ask(`Auto 200M wasn't sure this is safe (${Math.round(pDeny * 100)}% risky).`);
+    if (pDeny < settings.guardianThreshold) return { approved: true, decision: "Auto 150M approved" };
+    return ask(`Auto 150M wasn't sure this is safe (${Math.round(pDeny * 100)}% risky).`);
   },
 
   askUser(chat, step, reason, signal) {

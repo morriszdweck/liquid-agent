@@ -30,9 +30,9 @@ export const PARTS = {
   },
   guardian: {
     title: "Safety helper",
-    detail: "Auto 200M (INT4). Checks each action is safe before it runs.",
-    size: "about 900 MB",
-    bytes: 0.9e9,
+    detail: "Auto 150M. Checks each action is safe before it runs.",
+    size: "about 1.1 GB",
+    bytes: 1.1e9,
     port: 8766,
   },
   browser: {
@@ -99,6 +99,10 @@ const model = (name) => path.join(DIRS.models, name);
 const weights = (id) => model(weightsFile(id));
 const gb = (bytes) => `${(bytes / 1e9).toFixed(1)} GB`;
 const marker = (dir) => path.join(dir, ".ready");
+/** The safety helper's marker holds this name, so a copy set up with an older model fetches this one. */
+const GUARDIAN_MODEL = "ProCreations/auto-150m-3";
+const OLD_GUARDIANS = ["ProCreations/auto-200m-2-int4"];
+const guardianOnDisk = () => fs.existsSync(marker(DIRS.guardian)) && fs.readFileSync(marker(DIRS.guardian), "utf8").trim() === GUARDIAN_MODEL;
 
 const isGguf = (name) => typeof name === "string" && /\.gguf$/i.test(name) && name.split("/").every((part) => part && part !== "." && part !== "..");
 const customPath = (name) => {
@@ -231,7 +235,7 @@ class Backends {
   current = null;
   /** Parts between "start" and having a process, so two starts can't race. */
   launching = new Set();
-  /** Approve for Me was picked before Auto 200M was ready; it turns on once Auto 200M runs. */
+  /** Approve for Me was picked before Auto 150M was ready; it turns on once Auto 150M runs. */
   guardianWanted = false;
   /** Called with a part's id each time it becomes ready. */
   readyHooks = [];
@@ -339,7 +343,7 @@ class Backends {
       case "omni":
         return fs.existsSync(weights("omni")) && fs.existsSync(model(OMNI_PROJECTOR.file));
       case "guardian":
-        return fs.existsSync(marker(DIRS.guardian));
+        return guardianOnDisk();
       case "browser":
         return fs.existsSync(marker(DIRS.bridge));
     }
@@ -348,6 +352,11 @@ class Backends {
 
   installed(id) {
     return this.onDisk(id);
+  }
+
+  /** Set up with an older safety model; getting it again moves it to the current one. */
+  get guardianOutdated() {
+    return fs.existsSync(marker(DIRS.guardian)) && !guardianOnDisk();
   }
 
   /** Ready to answer. A model keeps answering with its old size while a new size downloads. */
@@ -703,20 +712,21 @@ class Backends {
     this.set("guardian", { status: "installing", text: "Setting up a private Python…" });
     await run(uv, ["venv", "--allow-existing", "--python", "3.12", venv], { env, signal });
     this.set("guardian", { status: "installing", text: "Installing the safety model's tools (the slow part)…" });
-    // Auto 200M is small enough for the CPU. On Linux the default PyTorch brings gigabytes of CUDA libraries, so take the CPU build.
+    // Auto 150M is small enough for the CPU. On Linux the default PyTorch brings gigabytes of CUDA libraries, so take the CPU build.
     const torch = IS_MAC ? [] : ["--torch-backend", "cpu"];
     await run(uv, ["pip", "install", ...torch, "--python", path.join(venv, "bin", "python"), "-r", path.join(ROOT, "guardian", "requirements.txt")], {
       env,
       signal,
       timeout: 1_800_000,
     });
-    this.set("guardian", { status: "installing", text: "Downloading Auto 200M…" });
-    await run(path.join(venv, "bin", "python"), ["-I", path.join(ROOT, "guardian", "server.py"), "--download-only"], {
+    this.set("guardian", { status: "installing", text: "Downloading Auto 150M…" });
+    await run(path.join(venv, "bin", "python"), ["-I", path.join(ROOT, "guardian", "server.py"), "--repo", GUARDIAN_MODEL, "--download-only"], {
       env,
       signal,
       timeout: 900_000,
     });
-    fs.writeFileSync(marker(DIRS.guardian), "");
+    fs.writeFileSync(marker(DIRS.guardian), GUARDIAN_MODEL);
+    for (const old of OLD_GUARDIANS) fs.rmSync(path.join(DIRS.hf, "hub", `models--${old.replace("/", "--")}`), { recursive: true, force: true });
   }
 
   get nodeEnv() {
@@ -830,7 +840,7 @@ class Backends {
       case "guardian":
         return {
           cmd: path.join(DIRS.guardian, ".venv", "bin", "python"),
-          args: ["-I", path.join(ROOT, "guardian", "server.py"), "--port", port],
+          args: ["-I", path.join(ROOT, "guardian", "server.py"), "--repo", GUARDIAN_MODEL, "--port", port],
           cwd: DIRS.guardian,
           env: { ...this.pythonEnv, HF_HUB_OFFLINE: "1" },
         };

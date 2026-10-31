@@ -85,7 +85,7 @@ export const PERSONALITIES = {
 export const DEFAULTS = {
   userName: "",
   personality: "friendly",
-  approvalMode: "askAlways", // askAlways | approveForMe (needs Auto 200M) | fullAuto
+  approvalMode: "askAlways", // askAlways | approveForMe (needs Auto 150M) | fullAuto
   theme: "system",
   voice: "female",
   speakReplies: false,

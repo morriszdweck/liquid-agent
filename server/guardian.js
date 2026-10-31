@@ -1,4 +1,4 @@
-// Auto 200M INT4 decides whether a proposed action is safe. A few shell
+// Auto 150M decides whether a proposed action is safe. A few shell
 // commands are never left to a model: they always ask the user.
 
 import { IS_MAC, isLocal, settings } from "./core.js";
@@ -52,7 +52,7 @@ export function hardDeny(tool, args) {
 }
 
 /**
- * Auto 200M was trained on coding-agent tools (Bash, Read, Write, WebFetch…)
+ * Auto 150M was trained on coding-agent tools (Bash, Read, Write, WebFetch…)
  * with plain-string arguments, so actions are described to it in those terms.
  */
 export function forAuto(tool, args = {}) {

@@ -256,9 +256,9 @@ function Safety({ settings }: { settings: SettingsType }) {
         </div>
       )}
       {settings.approvalMode === "approveForMe" && guardian?.status !== "running" && !wanted && (
-        <div className="notice">Auto 200M isn't running right now, so every action asks you until it's back.</div>
+        <div className="notice">Auto 150M isn't running right now, so every action asks you until it's back.</div>
       )}
-      <Row title="How careful Auto 200M is" detail={`Asks you when it's less than ${Math.round((1 - settings.guardianThreshold) * 100)}% sure an action is safe.`}>
+      <Row title="How careful Auto 150M is" detail={`Asks you when it's less than ${Math.round((1 - settings.guardianThreshold) * 100)}% sure an action is safe.`}>
         <input
           type="range"
           min={0.1}
@@ -419,7 +419,7 @@ function CustomModelModal({ part, onClose }: { part: Part; onClose: () => void }
       <p className="muted">
         Paste a model link from huggingface.co. Liquid Agent finds its GGUF files, checks the header and runs it on this {DEVICE}. It replaces the built-in LFM3 1.7B for chat.
       </p>
-      <div className="notice">A model you add hasn't been tested with Liquid Agent's tools. While it's answering, Full Auto works like Approve for Me: Auto 200M checks each action first.</div>
+      <div className="notice">A model you add hasn't been tested with Liquid Agent's tools. While it's answering, Full Auto works like Approve for Me: Auto 150M checks each action first.</div>
       <label className="field">
         <span>Hugging Face link</span>
         <input
@@ -602,7 +602,7 @@ export function Setup() {
     try {
       await api("PATCH", "/api/settings", { userName: name.trim(), smallQuant: size.small, omniQuant: size.omni });
       await api("POST", "/api/parts/install", { ids: PLANS[plan] });
-      // Approve for Me turns itself on once Auto 200M is ready.
+      // Approve for Me turns itself on once Auto 150M is ready.
       if (plan === "all") await api("PATCH", "/api/settings", { approvalMode: "approveForMe" });
     } catch (e) {
       errorToast(e);
@@ -677,7 +677,7 @@ export function Setup() {
             <ul>
               <li>Chat, writing and actions on your {DEVICE}</li>
               <li>Voice chat, pictures and your screen</li>
-              <li>Auto 200M, which approves safe actions for you</li>
+              <li>Auto 150M, which approves safe actions for you</li>
               <li>Clicks around websites for you</li>
             </ul>
           </button>

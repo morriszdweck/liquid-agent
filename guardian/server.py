@@ -1,13 +1,14 @@
-"""Auto 200M (INT4) guardian sidecar for Liquid Agent.
+"""Auto 150M guardian sidecar for Liquid Agent.
 
 Serves P(deny) for a proposed tool call on 127.0.0.1 only.
 
     POST /classify {"tool", "args", "request", "history"} -> {"p_deny": 0.12}
     GET  /health -> {"ok": true, "model": "..."}
 
-Uses ProCreations/auto-200m-2-int4 through the repo's own auto_quant.py loader
-(plain PyTorch; picks Apple MPS, then CPU; Linux gets the CPU build of
-PyTorch), and its build_input so the text matches what the model was trained on.
+Uses ProCreations/auto-150m-3, a ModernBERT classifier (0 = approve,
+1 = deny), with plain Transformers: BF16 on Apple MPS, FP32 on the CPU (Linux
+gets the CPU build of PyTorch). The text is serialized exactly as the model
+card shows, since that is what it was trained on.
 """
 
 import argparse
@@ -18,21 +19,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from huggingface_hub import hf_hub_download, snapshot_download
 
-# Only what the loader reads. The repo also holds a README, benchmarks and
-# training scripts that the app never needs.
-FILES = [
-    "auto_quant.py",
-    "auto_quant_int4.safetensors",
-    "quant_config.json",
-    "config.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "special_tokens_map.json",
-]
-REQUIRED = ["auto_quant.py", "auto_quant_int4.safetensors", "quant_config.json", "config.json", "tokenizer.json"]
+# Only what the model needs. The repo also holds a README, charts and eval scores.
+FILES = ["config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"]
+# Auto's own runtime fits a session to 8,192 tokens on Apple silicon and CPUs.
+MAX_TOKENS = 8192
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--repo", default=os.environ.get("LA_GUARDIAN_REPO", "ProCreations/auto-200m-2-int4"))
+parser.add_argument("--repo", default=os.environ.get("LA_GUARDIAN_REPO", "ProCreations/auto-150m-3"))
 parser.add_argument("--port", type=int, default=8766)
 parser.add_argument("--download-only", action="store_true")
 args = parser.parse_args()
@@ -42,20 +35,19 @@ if args.download_only:
     print("downloaded", args.repo)
     sys.exit(0)
 
-# Load from the local folder. Passing the repo name makes the loader ask for a
-# complete snapshot, which fails offline because the extras were skipped.
-folder = os.path.dirname(hf_hub_download(args.repo, "auto_quant.py"))
-missing = [f for f in REQUIRED if not os.path.exists(os.path.join(folder, f))]
+# Load from the local folder; the app starts this offline.
+folder = os.path.dirname(hf_hub_download(args.repo, "config.json"))
+missing = [f for f in FILES if not os.path.exists(os.path.join(folder, f))]
 if missing:
     sys.exit(f"[guardian] missing {', '.join(missing)}; remove the Safety helper in Settings and get it again")
 
-sys.path.insert(0, folder)
-import auto_quant  # noqa: E402
+import torch  # noqa: E402
+from transformers import AutoModelForSequenceClassification, AutoTokenizer  # noqa: E402
 
-model, tokenizer = auto_quant.load(folder)
-# Warm up once so the first real check isn't slow.
-auto_quant.score(model, tokenizer, auto_quant.build_input("List my files.", [], {"tool": "Bash", "args": "ls"}))
-print(f"[guardian] {args.repo} ready at 127.0.0.1:{args.port}", flush=True)
+device = "mps" if torch.backends.mps.is_available() else "cpu"
+tokenizer = AutoTokenizer.from_pretrained(folder)
+model = AutoModelForSequenceClassification.from_pretrained(folder, dtype=torch.bfloat16 if device == "mps" else torch.float32)
+model = model.to(device).eval()
 
 
 def as_text(value):
@@ -63,11 +55,38 @@ def as_text(value):
     return value if isinstance(value, str) else json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def build_input(request, history, call):
+    """The serialization every Auto model was trained on: proposed call, user request, agent history."""
+    parts = ["### PROPOSED TOOL CALL", f"tool: {call['tool']}", f"args: {as_text(call['args'])}", "", "### USER REQUEST", request, "", "### AGENT HISTORY"]
+    if not history:
+        parts.append("(no prior actions)")
+    for i, h in enumerate(history, 1):
+        parts.append(f"[{i}] {h['tool']}({as_text(h['args'])})\n-> {as_text(h.get('result', ''))}")
+    return "\n".join(parts)
+
+
+def score(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=MAX_TOKENS).to(device)
+    with torch.inference_mode():
+        return model(**inputs).logits.float().softmax(-1)[0, 1].item()
+
+
 def serialize(body):
     if "text" in body:
         return body["text"]
-    history = [{"tool": h["tool"], "args": as_text(h["args"]), "result": h.get("result", "")} for h in body.get("history", [])]
-    return auto_quant.build_input(body["request"], history, {"tool": body["tool"], "args": as_text(body["args"])})
+    call = {"tool": body["tool"], "args": body["args"]}
+    history = list(body.get("history", []))
+    text = build_input(body["request"], history, call)
+    # Too long: drop the oldest actions first, so the call and the request always fit.
+    while history and len(tokenizer(text)["input_ids"]) > MAX_TOKENS:
+        history = history[1:]
+        text = build_input(body["request"], history, call)
+    return text
+
+
+# Warm up once so the first real check isn't slow.
+score(build_input("List my files.", [], {"tool": "Bash", "args": "ls"}))
+print(f"[guardian] {args.repo} ready on {device} at 127.0.0.1:{args.port}", flush=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             text = serialize(json.loads(self.rfile.read(length)))
-            self._send(200, {"p_deny": float(auto_quant.score(model, tokenizer, text))})
+            self._send(200, {"p_deny": float(score(text))})
         except Exception as e:
             self._send(400, {"error": str(e)})
 

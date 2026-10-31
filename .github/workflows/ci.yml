@@ -160,7 +160,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci && npm run build
-      - name: Install Auto 200M and Betterwright and start them
+      - name: Install Auto 150M and Betterwright and start them
         run: node scripts/smoke.mjs --helpers
         timeout-minutes: 40
 

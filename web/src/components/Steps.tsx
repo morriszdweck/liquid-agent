@@ -60,7 +60,7 @@ export function ToolIcon({ tool, size = 15 }: { tool: string; size?: number }) {
 
 const WAITING: Record<string, string> = {
   pending: "Getting ready",
-  checking: "Auto 200M is checking",
+  checking: "Auto 150M is checking",
   approval: "Waiting for you",
   running: "Working",
 };
@@ -86,8 +86,8 @@ function StepRow({ step }: { step: Step }) {
         <span className="step-label">{step.label}</span>
         {busy && <span className="step-wait">{WAITING[step.status]}…</span>}
         {!busy && step.decision && (
-          <span className={cx("pill", denied ? "pill-bad" : step.decision.startsWith("Auto 200M") ? "pill-accent" : "pill-muted")}>
-            {step.decision.startsWith("Auto 200M") && <ShieldCheck size={11} />}
+          <span className={cx("pill", denied ? "pill-bad" : step.decision.startsWith("Auto ") ? "pill-accent" : "pill-muted")}>
+            {step.decision.startsWith("Auto ") && <ShieldCheck size={11} />}
             {step.decision}
           </span>
         )}

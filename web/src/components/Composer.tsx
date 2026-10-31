@@ -29,16 +29,16 @@ type Pending = { key: string; name: string; kind: Attachment["kind"]; preview?: 
 
 export const MODES: { value: ApprovalMode; label: string; detail: string; icon: JSX.Element }[] = [
   { value: "askAlways", label: "Ask for Approval", detail: "Asks you before every action.", icon: <ShieldQuestion size={15} /> },
-  { value: "approveForMe", label: "Approve for Me", detail: "Auto 200M approves safe actions and asks about the rest.", icon: <ShieldCheck size={15} /> },
+  { value: "approveForMe", label: "Approve for Me", detail: "Auto 150M approves safe actions and asks about the rest.", icon: <ShieldCheck size={15} /> },
   { value: "fullAuto", label: "Full Auto", detail: "Runs everything. Risky commands still ask.", icon: <Zap size={15} /> },
 ];
 
-/** Approve for Me needs Auto 200M. Says what picking it will do when Auto 200M isn't ready yet. */
+/** Approve for Me needs Auto 150M. Says what picking it will do when Auto 150M isn't ready yet. */
 export function modeNote(guardian: Part | undefined, wanted: boolean) {
   if (guardian?.status === "running") return null;
-  if (wanted) return guardian?.status === "failed" ? "Auto 200M didn't finish. Pick this again to retry." : "Getting Auto 200M ready. It switches on by itself.";
-  if (guardian?.status === "installed" || guardian?.status === "starting") return "Starts Auto 200M first.";
-  return `Downloads Auto 200M first (${guardian?.size ?? "about 900 MB"}).`;
+  if (wanted) return guardian?.status === "failed" ? "Auto 150M didn't finish. Pick this again to retry." : "Getting Auto 150M ready. It switches on by itself.";
+  if (guardian?.status === "installed" || guardian?.status === "starting") return "Starts Auto 150M first.";
+  return `Downloads Auto 150M first (${guardian?.size ?? "about 1.1 GB"}).`;
 }
 
 const kindOf = (file: File): Attachment["kind"] =>
@@ -371,7 +371,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                   className={cx("mode-btn", open && "active")}
                   onClick={toggle}
                   aria-label={`Permissions: ${mode.label}`}
-                  title={guardianWanted ? "Approve for Me turns on once Auto 200M is ready" : "Permissions"}
+                  title={guardianWanted ? "Approve for Me turns on once Auto 150M is ready" : "Permissions"}
                 >
                   {guardianWanted && guardian?.status !== "failed" ? <Spinner size={14} /> : mode.icon}
                   <span>{mode.label}</span>
@@ -382,7 +382,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                 icon: m.icon,
                 detail:
                   (m.value === "approveForMe" && modeNote(guardian, guardianWanted)) ||
-                  (m.value === "fullAuto" && customBrain && "Your own model is answering, so Auto 200M still checks each action.") ||
+                  (m.value === "fullAuto" && customBrain && "Your own model is answering, so Auto 150M still checks each action.") ||
                   m.detail,
                 checked: m.value === mode.value,
                 onClick: () => api("PATCH", "/api/settings", { approvalMode: m.value }).catch(errorToast),

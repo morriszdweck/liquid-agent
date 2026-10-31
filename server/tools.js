@@ -4,7 +4,7 @@
 //
 // kind: "read"  only looks at things, so Approve for Me runs it without asking
 //       "safe"  changes nothing outside the app (memory, reminders)
-//       "write" changes something, so Auto 200M or the user must approve it
+//       "write" changes something, so Auto 150M or the user must approve it
 
 import crypto from "node:crypto";
 import fs from "node:fs";

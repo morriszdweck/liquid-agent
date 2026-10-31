@@ -183,7 +183,7 @@ route("POST", "/api/speak", async (req, _, res) => {
 });
 
 route("GET", "/api/settings", () => settings);
-// Approve for Me needs Auto 200M. Choosing it early fetches Auto 200M and turns the mode on once it's ready.
+// Approve for Me needs Auto 150M. Choosing it early fetches Auto 150M and turns the mode on once it's ready.
 route("PATCH", "/api/settings", async (req) => {
   const patch = (await json(req)) ?? {};
   const before = { small: settings.smallQuant, omni: settings.omniQuant };
@@ -390,6 +390,11 @@ server.listen(PORT, HOST, () => {
   console.log(`Liquid Agent is running at http://127.0.0.1:${PORT}`);
   console.log(`Data: ${DATA}`);
   if (process.argv.includes("--open")) openBrowser();
+  if (backends.guardianOutdated) {
+    // Set up with Auto 200M: fetch Auto 150M, and turn Approve for Me back on once it's ready.
+    if (settings.approvalMode === "approveForMe") backends.wantGuardian(true);
+    backends.install(["guardian"]);
+  }
   if (settings.approvalMode === "approveForMe" && !backends.installed("guardian")) updateSettings({ approvalMode: "askAlways" });
   backends
     .startAll()

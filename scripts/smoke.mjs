@@ -5,7 +5,7 @@
 //                                     LFM3 1.7B, then has it answer (about 1.1 GB)
 //   node scripts/smoke.mjs --omni     also downloads the smallest LFM3 Omni 2B, then
 //                                     has it speak, listen and look at a picture (1.6 GB)
-//   node scripts/smoke.mjs --helpers  also installs and starts Auto 200M and the
+//   node scripts/smoke.mjs --helpers  also installs and starts Auto 150M and the
 //                                     Web helper (about 1.2 GB)
 //
 // Uses its own port and data folder, so a copy of Liquid Agent that is already
@@ -27,13 +27,18 @@ const HELPERS = process.argv.includes("--helpers");
 const OMNI = process.argv.includes("--omni");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "liquid-agent-smoke-"));
 
-const server = spawn(process.execPath, [path.join(ROOT, "server", "index.js")], {
-  env: { ...process.env, LIQUID_AGENT_HOME: home, LIQUID_AGENT_PORT: String(PORT) },
-  stdio: ["ignore", "pipe", "pipe"],
-});
 let log = "";
-server.stdout.on("data", (d) => (log += d));
-server.stderr.on("data", (d) => (log += d));
+function start() {
+  const child = spawn(process.execPath, [path.join(ROOT, "server", "index.js")], {
+    env: { ...process.env, LIQUID_AGENT_HOME: home, LIQUID_AGENT_PORT: String(PORT) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (d) => (log += d));
+  child.stderr.on("data", (d) => (log += d));
+  child.on("exit", (code) => fail(`the server exited with ${code}`));
+  return child;
+}
+let server = start();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let token = "";
@@ -179,21 +184,35 @@ async function waitFor(what, test, minutes) {
   fail(`timed out waiting for ${what}`);
 }
 
-server.on("exit", (code) => fail(`the server exited with ${code}`));
 process.on("SIGINT", () => finish(130));
 
-for (let i = 0; ; i++) {
-  try {
-    const health = await (await fetch(`${BASE}/healthz`)).json();
-    if (health.app === "liquid-agent") break;
-  } catch {}
-  if (i > 60) fail("the server didn't start");
-  await sleep(500);
+async function up() {
+  for (let i = 0; ; i++) {
+    try {
+      const health = await (await fetch(`${BASE}/healthz`)).json();
+      if (health.app === "liquid-agent") break;
+    } catch {}
+    if (i > 60) fail("the server didn't start");
+    await sleep(500);
+  }
+  const page = await (await fetch(BASE + "/")).text();
+  token = page.match(/name="liquid-token" content="([^"]+)"/)?.[1] ?? "";
 }
-check(true, `server answers on ${BASE}`);
 
-const page = await (await fetch(BASE + "/")).text();
-token = page.match(/name="liquid-token" content="([^"]+)"/)?.[1] ?? "";
+/** Stops the server the way the app's Quit does, then starts it again on the same data. */
+async function restart() {
+  const old = server;
+  old.removeAllListeners("exit");
+  await new Promise((resolve) => {
+    old.once("exit", resolve);
+    old.kill("SIGTERM");
+  });
+  server = start();
+  await up();
+}
+
+await up();
+check(true, `server answers on ${BASE}`);
 check(token.length > 0, "the page carries a token");
 
 const refused = await fetch(BASE + "/api/state");
@@ -264,13 +283,23 @@ if (OMNI) {
 if (HELPERS) {
   await call("POST", "/api/parts/install", { ids: ["guardian", "browser"] });
   const running = (s, id) => s.parts.find((p) => p.id === id && p.status === "running");
-  await waitFor("Auto 200M", (s) => running(s, "guardian"), 30);
-  check(true, "Auto 200M runs");
+  await waitFor("Auto 150M", (s) => running(s, "guardian"), 30);
+  check(true, "Auto 150M runs");
   await waitFor("the Web helper", (s) => running(s, "browser"), 30);
   check(true, "the Web helper runs");
   await call("PATCH", "/api/settings", { approvalMode: "approveForMe" });
   const mode = (await call("GET", "/api/settings")).approvalMode;
   check(mode === "approveForMe", "Approve for Me turns on");
+
+  const marker = path.join(home, "guardian", ".ready");
+  check(fs.readFileSync(marker, "utf8") === "ProCreations/auto-150m-3", "it notes which model it set up");
+  // A copy set up with Auto 200M left an empty marker.
+  fs.writeFileSync(marker, "");
+  await restart();
+  await waitFor("Auto 150M after an upgrade", (s) => running(s, "guardian"), 10);
+  check(fs.readFileSync(marker, "utf8") === "ProCreations/auto-150m-3", "a copy set up with Auto 200M moves to Auto 150M");
+  await waitFor("Approve for Me to come back", (s) => s.settings.approvalMode === "approveForMe", 1);
+  check(true, "Approve for Me comes back on");
 }
 
 console.log("All good.");
