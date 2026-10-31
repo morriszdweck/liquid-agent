@@ -367,7 +367,12 @@ server.on("upgrade", (req, socket, head) => {
   });
 });
 
+// The Liquid Agent Mac app (desktop/). The app the installer makes with osacompile has no such binary.
+const DESKTOP_APP = "/Applications/Liquid Agent.app";
+const DESKTOP_APP_BINARY = path.join(DESKTOP_APP, "Contents", "MacOS", "Liquid Agent");
+
 function openBrowser() {
+  if (fs.existsSync(DESKTOP_APP_BINARY)) return void openPath(DESKTOP_APP).catch(() => {});
   openPath(`http://127.0.0.1:${PORT}`).catch(() => console.log(`Open http://127.0.0.1:${PORT} in your browser.`));
 }
 

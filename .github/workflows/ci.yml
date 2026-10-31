@@ -164,10 +164,37 @@ jobs:
         run: node scripts/smoke.mjs --helpers
         timeout-minutes: 40
 
+  mac-app:
+    name: Liquid Agent Mac app (DMG)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: node --check main.cjs
+        working-directory: desktop
+      - name: Build the app for Apple silicon and Intel, signed ad hoc
+        run: npx electron-builder --mac dmg --arm64 --x64 --publish never
+        working-directory: desktop
+      - name: It is a real app with the right name and icon
+        run: |
+          for arch in arm64 x64; do test -s "desktop/dist/Liquid-Agent-$arch.dmg"; done
+          test -x "desktop/dist/mac-arm64/Liquid Agent.app/Contents/MacOS/Liquid Agent"
+          plutil -p "desktop/dist/mac-arm64/Liquid Agent.app/Contents/Info.plist" | grep -q codes.mincoffical.liquidagent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-app
+          path: desktop/dist/*.dmg
+
   release:
     name: Publish the build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [check, desktop, install]
+    needs: [check, desktop, install, mac-app]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -175,6 +202,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: bundle
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-app
           path: release
       - name: Publish it as the latest release, which installed copies update to
         env:
@@ -186,5 +217,5 @@ jobs:
             echo "build-$build is already out."
             exit 0
           fi
-          gh release create "build-$build" release/liquid-agent.tar.gz release/latest.json \
+          gh release create "build-$build" release/liquid-agent.tar.gz release/latest.json release/Liquid-Agent-arm64.dmg release/Liquid-Agent-x64.dmg \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Build $build" --notes "$NOTES" --latest

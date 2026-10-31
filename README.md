@@ -16,15 +16,22 @@ Everything stays on your computer. The only network traffic is the one-time down
 
 ## Install
 
-Paste this into Terminal on macOS, or a terminal on Linux:
+On a Mac, download the app and drag it to Applications:
+
+- [Liquid Agent for Apple silicon](https://github.com/morriszdweck/liquid-agent/releases/latest/download/Liquid-Agent-arm64.dmg)
+- [Liquid Agent for Intel](https://github.com/morriszdweck/liquid-agent/releases/latest/download/Liquid-Agent-x64.dmg)
+
+It isn't notarized yet, so the first time macOS blocks it: open System Settings → Privacy & Security and click **Open Anyway**. On first launch it installs Liquid Agent (the same copy the command below installs) and shows the setup screen.
+
+Or paste this into Terminal on macOS, or a terminal on Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh | bash
 ```
 
-It installs a ready-to-run copy in `~/.liquid-agent` (no npm or build step, and a private copy of Node.js if you don't have one), adds **Liquid Agent** to your Applications folder (or app menu on Linux) and a `liquid-agent` command, then opens the setup screen in your browser at <http://127.0.0.1:8170>. Pick what to download and a model size there; that's it.
+It installs a ready-to-run copy in `~/.liquid-agent` (no npm or build step, and a private copy of Node.js if you don't have one), adds **Liquid Agent** to your app menu on Linux and a `liquid-agent` command, then opens the setup screen at <http://127.0.0.1:8170> (in the Mac app when it's installed). Pick what to download and a model size there; that's it.
 
-Afterwards, open it from Applications, Spotlight or your app menu, or with `liquid-agent`. `liquid-agent stop` stops it.
+Afterwards, open it from Applications, Spotlight or your app menu, or with `liquid-agent`. The Mac app is a window onto that same copy (`desktop/`), so it updates along with it. `liquid-agent stop` stops it.
 
 It keeps itself up to date: every push to `main` is published as a release, new versions download in the background and go in when nothing is running, and if one doesn't start the previous version comes back. Turn this off in Settings → General; `liquid-agent update` gets the newest version right away.
 

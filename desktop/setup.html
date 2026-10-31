@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>Liquid Agent</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f3f3f4;
+        --fg: #1a1c1f;
+        --fg-3: #8b8f96;
+        --danger: #e5484d;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0a0a0b;
+          --fg: #fcfcfc;
+          --fg-3: #7d8087;
+          --danger: #ff6369;
+        }
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        -webkit-app-region: drag;
+        user-select: none;
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        max-width: 420px;
+        padding: 24px;
+        text-align: center;
+      }
+      svg {
+        width: 64px;
+        height: 64px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      #status {
+        min-height: 20px;
+        color: var(--fg-3);
+      }
+      #status.bad {
+        color: var(--danger);
+        user-select: text;
+      }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 2px solid color-mix(in srgb, var(--fg-3) 35%, transparent);
+        border-top-color: var(--fg);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      .done .spinner {
+        display: none;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#5ab4ff" />
+            <stop offset="1" stop-color="#0169cc" />
+          </linearGradient>
+        </defs>
+        <rect width="64" height="64" rx="16" fill="url(#g)" />
+        <path d="M32 13c7 9 13 16 13 23.5a13 13 0 0 1-26 0C19 29 25 22 32 13z" fill="#fff" />
+      </svg>
+      <h1>Liquid Agent</h1>
+      <div class="spinner"></div>
+      <div id="status">Starting…</div>
+    </main>
+    <script>
+      const status = document.getElementById("status");
+      window.say = (text) => (status.textContent = text);
+      window.failed = (text) => {
+        document.body.classList.add("done");
+        status.classList.add("bad");
+        status.textContent = text;
+      };
+    </script>
+  </body>
+</html>

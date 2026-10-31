@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5ab4ff"/>
+      <stop offset="1" stop-color="#0169cc"/>
+    </linearGradient>
+    <filter id="s" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <!-- The web icon on Apple's 1024 grid: an 824 rounded square with 100 of margin. -->
+  <g transform="translate(100 100) scale(12.875)" filter="url(#s)">
+    <rect width="64" height="64" rx="14.4" fill="url(#g)"/>
+    <path d="M32 13c7 9 13 16 13 23.5a13 13 0 0 1-26 0C19 29 25 22 32 13z" fill="#fff"/>
+  </g>
+</svg>

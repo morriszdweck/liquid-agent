@@ -6,8 +6,8 @@
 # Works on macOS and on Linux (x86_64 or arm64). The app goes in ~/.liquid-agent,
 # with its own copy of Node.js if this computer has none new enough. It comes
 # ready to run (no npm or build step) and keeps itself up to date after this.
-# It adds "Liquid Agent" to ~/Applications (macOS) or the app menu (Linux) and a
-# `liquid-agent` command, then opens the setup screen in your browser. Models
+# It adds "Liquid Agent" to the app menu (Linux; on macOS the Mac app opens it) and a
+# `liquid-agent` command, then opens the setup screen. Models
 # are downloaded from there.
 set -euo pipefail
 
@@ -136,7 +136,9 @@ show() {
 }
 case "\${1:-open}" in
   open)
-    if running; then
+    if [ "\$(uname -s)" = Darwin ] && [ -x "/Applications/Liquid Agent.app/Contents/MacOS/Liquid Agent" ]; then
+      open -a "/Applications/Liquid Agent.app" # it starts Liquid Agent if needed
+    elif running; then
       show "http://127.0.0.1:\$PORT"
     else
       echo "Starting Liquid Agent at http://127.0.0.1:\$PORT"
@@ -156,16 +158,12 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$ROOT/bin/liquid-agent" "$HOME/.local/bin/liquid-agent"
 
 if [ "$OS" = "Darwin" ]; then
-  # A small app for Launchpad, Spotlight and the Dock.
-  APP="$HOME/Applications/Liquid Agent.app"
-  mkdir -p "$HOME/Applications"
-  rm -rf "$APP"
-  osacompile -o "$APP" -e "do shell script quoted form of \"$ROOT/bin/liquid-agent\"" >/dev/null 2>&1 || true
-  if [ -d "$APP" ]; then
-    # Give it the Liquid Agent icon; a plain one is fine if this doesn't work.
-    osascript -l JavaScript -e "ObjC.import('AppKit'); const img = \$.NSImage.alloc.initWithContentsOfFile('$ROOT/app/web/dist/icon.svg'); if (img && img.isValid) \$.NSWorkspace.sharedWorkspace.setIconForFileOptions(img, '$APP', 0);" >/dev/null 2>&1 || true
-  fi
-  WHERE="Applications or Spotlight"
+  # The Liquid Agent Mac app (a DMG on the website) is the way to open it on a Mac.
+  # Older installs made a small app in ~/Applications that only opened a browser tab: remove it.
+  old="$HOME/Applications/Liquid Agent.app"
+  if [ -d "$old" ] && [ ! -e "$old/Contents/MacOS/Liquid Agent" ]; then rm -rf "$old"; fi
+  if [ -e "/Applications/Liquid Agent.app/Contents/MacOS/Liquid Agent" ]; then WHERE="Applications or Spotlight"
+  else WHERE="the Mac app (get it at liquid-agent.mincoffical.codes)"; fi
 else
   # An entry in the app menu.
   APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
@@ -185,7 +183,7 @@ EOF
 fi
 
 bold "Liquid Agent is installed."
-echo "Open it any time from $WHERE (\"Liquid Agent\"), or run: liquid-agent"
+echo "Open \"Liquid Agent\" any time from $WHERE, or run: liquid-agent"
 if [ "$OS" = "Linux" ]; then
   # Everything works without these; they add the clipboard, audio files and reminder pop-ups.
   if command -v apt-get >/dev/null; then pm="sudo apt install" ffmpeg="ffmpeg" notify="libnotify-bin"
@@ -212,5 +210,8 @@ case ":$PATH:" in
   *) echo "(To use the liquid-agent command, add ~/.local/bin to your PATH.)" ;;
 esac
 
-step "Opening the setup screen"
-"$ROOT/bin/liquid-agent" open
+# The Mac app runs this installer itself and opens Liquid Agent when it's done.
+if [ -z "${LIQUID_AGENT_NO_OPEN:-}" ]; then
+  step "Opening the setup screen"
+  "$ROOT/bin/liquid-agent" open
+fi
