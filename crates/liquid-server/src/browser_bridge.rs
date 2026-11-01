@@ -618,7 +618,12 @@ pub async fn run() -> Result<()> {
         .route("/type", post(type_text))
         .with_state(shared.clone());
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    println!("[bridge] Web helper on 127.0.0.1:{port}");
+    println!(
+        "{}",
+        liquid_core::i18n::diag_language()
+            .bridge_ready
+            .replace("{port}", &port.to_string())
+    );
     let stop = CancellationToken::new();
     let stopping = stop.clone();
     tokio::spawn(async move {

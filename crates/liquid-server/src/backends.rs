@@ -336,7 +336,12 @@ impl Backends {
                         *settings = next.clone();
                         app.emit(json!({"type":"settings","settings":next}));
                     }
-                    Err(error) => eprintln!("Could not activate the safety helper: {error}"),
+                    Err(error) => eprintln!(
+                        "{}",
+                        liquid_core::i18n::diag_language()
+                            .activate_safety
+                            .replace("{error}", &error.to_string())
+                    ),
                 }
             }
         }

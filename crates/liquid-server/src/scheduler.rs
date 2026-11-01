@@ -88,7 +88,12 @@ fn fire_reminders(app: &App) {
         .cloned()
         .collect();
     if let Err(e) = store::save(&app.data, "reminders.json", &json!(next)) {
-        eprintln!("Could not save reminders: {e}");
+        eprintln!(
+            "{}",
+            liquid_core::i18n::diag_language()
+                .save_reminders
+                .replace("{error}", &e.to_string())
+        );
         return;
     }
     *reminders = next.clone();
@@ -201,7 +206,12 @@ pub async fn run(app: &App, id: &str, scheduled: bool) -> Response {
             r["lastRun"] = json!(now());
             r["lastChatId"] = json!(chat_id);
             if let Err(e) = store::save(&app.data, "routines.v2.json", &json!(next)) {
-                eprintln!("Could not save routine: {e}");
+                eprintln!(
+                    "{}",
+                    liquid_core::i18n::diag_language()
+                        .save_routine
+                        .replace("{error}", &e.to_string())
+                );
             } else {
                 *routines = next.clone();
                 app.emit(json!({"type":"routines","routines":next}));

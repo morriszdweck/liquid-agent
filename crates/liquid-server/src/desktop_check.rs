@@ -132,5 +132,10 @@ async fn reminder_pop_ups_and_graphics_card() {
     scheduler::desktop_notify("Liquid Agent desktop check");
     // The pop-up is sent in the background; give it time to start.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    println!("graphics card: {}", backends::gpu_flavor());
+    println!(
+        "{}",
+        liquid_core::i18n::diag_language()
+            .graphics_card
+            .replace("{gpu}", &backends::gpu_flavor().to_string())
+    );
 }

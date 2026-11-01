@@ -944,10 +944,196 @@ pub fn console(code: &str) -> &'static Console {
 
 /// The terminal language: LIQUID_AGENT_LANG, else the system's LANG (as the installer uses it).
 pub fn console_language() -> &'static Console {
+    console(terminal_code().as_str())
+}
+
+/// The language code of the terminal, from LIQUID_AGENT_LANG or LANG; empty when neither is set.
+fn terminal_code() -> String {
     let raw = std::env::var("LIQUID_AGENT_LANG")
         .or_else(|_| std::env::var("LANG"))
         .unwrap_or_default();
-    console(raw.split(['_', '.', '@', '-']).next().unwrap_or(""))
+    raw.split(['_', '.', '@', '-'])
+        .next()
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// Human-readable diagnostics that go to the log or the terminal, as opposed to the protocol output the server reads.
+pub struct Diag {
+    /// Template for `save_reminders`; see the English line for the placeholders.
+    pub save_reminders: &'static str,
+    /// Template for `save_routine`; see the English line for the placeholders.
+    pub save_routine: &'static str,
+    /// Template for `save_chat`; see the English line for the placeholders.
+    pub save_chat: &'static str,
+    /// Template for `updating`; see the English line for the placeholders.
+    pub updating: &'static str,
+    /// Template for `move_old`; see the English line for the placeholders.
+    pub move_old: &'static str,
+    /// Template for `install_update`; see the English line for the placeholders.
+    pub install_update: &'static str,
+    /// Template for `start_updated`; see the English line for the placeholders.
+    pub start_updated: &'static str,
+    /// Template for `updated`; see the English line for the placeholders.
+    pub updated: &'static str,
+    /// Template for `build_not_started`; see the English line for the placeholders.
+    pub build_not_started: &'static str,
+    /// Template for `activate_safety`; see the English line for the placeholders.
+    pub activate_safety: &'static str,
+    /// Template for `bridge_ready`; see the English line for the placeholders.
+    pub bridge_ready: &'static str,
+    /// Template for `guardian_ready`; see the English line for the placeholders.
+    pub guardian_ready: &'static str,
+    /// Template for `graphics_card`; see the English line for the placeholders.
+    pub graphics_card: &'static str,
+}
+
+const DIAG_EN: Diag = Diag {
+    save_reminders: "Could not save reminders: {error}",
+    save_routine: "Could not save routine: {error}",
+    save_chat: "Could not save chat: {error}",
+    updating: "Updating to build {build}",
+    move_old: "Could not move the old app: {error}",
+    install_update: "Could not install the update: {error}",
+    start_updated: "Could not start updated app: {error}",
+    updated: "Updated to build {build}",
+    build_not_started: "Build {build} did not start; restoring the previous version.",
+    activate_safety: "Could not activate the safety helper: {error}",
+    bridge_ready: "[bridge] Web helper on 127.0.0.1:{port}",
+    guardian_ready: "[guardian] {model} ready at 127.0.0.1:{port}",
+    graphics_card: "graphics card: {gpu}",
+};
+
+const DIAG_ES: Diag = Diag {
+    save_reminders: "No se pudieron guardar los recordatorios: {error}",
+    save_routine: "No se pudo guardar la rutina: {error}",
+    save_chat: "No se pudo guardar el chat: {error}",
+    updating: "Actualizando a la versión {build}",
+    move_old: "No se pudo mover la app anterior: {error}",
+    install_update: "No se pudo instalar la actualización: {error}",
+    start_updated: "No se pudo iniciar la app actualizada: {error}",
+    updated: "Actualizado a la versión {build}",
+    build_not_started: "La versión {build} no se inició; se restaura la anterior.",
+    activate_safety: "No se pudo activar el asistente de seguridad: {error}",
+    bridge_ready: "[bridge] Asistente web en 127.0.0.1:{port}",
+    guardian_ready: "[guardian] {model} listo en 127.0.0.1:{port}",
+    graphics_card: "tarjeta gráfica: {gpu}",
+};
+
+const DIAG_PT: Diag = Diag {
+    save_reminders: "Não foi possível salvar os lembretes: {error}",
+    save_routine: "Não foi possível salvar a rotina: {error}",
+    save_chat: "Não foi possível salvar o chat: {error}",
+    updating: "Atualizando para a versão {build}",
+    move_old: "Não foi possível mover o aplicativo anterior: {error}",
+    install_update: "Não foi possível instalar a atualização: {error}",
+    start_updated: "Não foi possível iniciar o aplicativo atualizado: {error}",
+    updated: "Atualizado para a versão {build}",
+    build_not_started: "A versão {build} não iniciou; restaurando a anterior.",
+    activate_safety: "Não foi possível ativar o auxiliar de segurança: {error}",
+    bridge_ready: "[bridge] Auxiliar web em 127.0.0.1:{port}",
+    guardian_ready: "[guardian] {model} pronto em 127.0.0.1:{port}",
+    graphics_card: "placa de vídeo: {gpu}",
+};
+
+const DIAG_FR: Diag = Diag {
+    save_reminders: "Impossible d'enregistrer les rappels : {error}",
+    save_routine: "Impossible d'enregistrer la routine : {error}",
+    save_chat: "Impossible d'enregistrer la conversation : {error}",
+    updating: "Mise à jour vers la version {build}",
+    move_old: "Impossible de déplacer l'ancienne application : {error}",
+    install_update: "Impossible d'installer la mise à jour : {error}",
+    start_updated: "Impossible de lancer l'application mise à jour : {error}",
+    updated: "Mis à jour vers la version {build}",
+    build_not_started: "La version {build} n'a pas démarré ; restauration de la précédente.",
+    activate_safety: "Impossible d'activer l'assistant de sécurité : {error}",
+    bridge_ready: "[bridge] Assistant web sur 127.0.0.1:{port}",
+    guardian_ready: "[guardian] {model} prêt sur 127.0.0.1:{port}",
+    graphics_card: "carte graphique : {gpu}",
+};
+
+const DIAG_DE: Diag = Diag {
+    save_reminders: "Erinnerungen konnten nicht gespeichert werden: {error}",
+    save_routine: "Routine konnte nicht gespeichert werden: {error}",
+    save_chat: "Chat konnte nicht gespeichert werden: {error}",
+    updating: "Aktualisierung auf Version {build}",
+    move_old: "Die alte App konnte nicht verschoben werden: {error}",
+    install_update: "Das Update konnte nicht installiert werden: {error}",
+    start_updated: "Die aktualisierte App konnte nicht gestartet werden: {error}",
+    updated: "Auf Version {build} aktualisiert",
+    build_not_started:
+        "Version {build} startete nicht; die vorherige Version wird wiederhergestellt.",
+    activate_safety: "Der Sicherheitshelfer konnte nicht aktiviert werden: {error}",
+    bridge_ready: "[bridge] Web-Helfer auf 127.0.0.1:{port}",
+    guardian_ready: "[guardian] {model} bereit auf 127.0.0.1:{port}",
+    graphics_card: "Grafikkarte: {gpu}",
+};
+
+const DIAG_IT: Diag = Diag {
+    save_reminders: "Impossibile salvare i promemoria: {error}",
+    save_routine: "Impossibile salvare la routine: {error}",
+    save_chat: "Impossibile salvare la chat: {error}",
+    updating: "Aggiornamento alla versione {build}",
+    move_old: "Impossibile spostare la vecchia app: {error}",
+    install_update: "Impossibile installare l'aggiornamento: {error}",
+    start_updated: "Impossibile avviare l'app aggiornata: {error}",
+    updated: "Aggiornato alla versione {build}",
+    build_not_started: "La versione {build} non è partita; ripristino della precedente.",
+    activate_safety: "Impossibile attivare l'assistente di sicurezza: {error}",
+    bridge_ready: "[bridge] Assistente web su 127.0.0.1:{port}",
+    guardian_ready: "[guardian] {model} pronto su 127.0.0.1:{port}",
+    graphics_card: "scheda grafica: {gpu}",
+};
+
+const DIAG_ZH: Diag = Diag {
+    save_reminders: "无法保存提醒：{error}",
+    save_routine: "无法保存例行任务：{error}",
+    save_chat: "无法保存聊天：{error}",
+    updating: "正在更新到版本 {build}",
+    move_old: "无法移动旧版应用：{error}",
+    install_update: "无法安装更新：{error}",
+    start_updated: "无法启动更新后的应用：{error}",
+    updated: "已更新到版本 {build}",
+    build_not_started: "版本 {build} 未能启动，正在恢复之前的版本。",
+    activate_safety: "无法启用安全助手：{error}",
+    bridge_ready: "[bridge] 网页助手位于 127.0.0.1:{port}",
+    guardian_ready: "[guardian] {model} 已就绪，位于 127.0.0.1:{port}",
+    graphics_card: "显卡：{gpu}",
+};
+
+const DIAG_JA: Diag = Diag {
+    save_reminders: "リマインダーを保存できませんでした：{error}",
+    save_routine: "ルーティンを保存できませんでした：{error}",
+    save_chat: "チャットを保存できませんでした：{error}",
+    updating: "バージョン {build} に更新しています",
+    move_old: "古いアプリを移動できませんでした：{error}",
+    install_update: "更新をインストールできませんでした：{error}",
+    start_updated: "更新後のアプリを起動できませんでした：{error}",
+    updated: "バージョン {build} に更新しました",
+    build_not_started: "バージョン {build} が起動しなかったため、前のバージョンに戻します。",
+    activate_safety: "安全確認ヘルパーを有効にできませんでした：{error}",
+    bridge_ready: "[bridge] ウェブヘルパーは 127.0.0.1:{port} で動作中",
+    guardian_ready: "[guardian] {model} は 127.0.0.1:{port} で準備完了",
+    graphics_card: "グラフィックカード：{gpu}",
+};
+
+/// The diagnostics for a language code; anything unknown gets English.
+pub fn diag(code: &str) -> &'static Diag {
+    match code {
+        "es" => &DIAG_ES,
+        "pt" => &DIAG_PT,
+        "fr" => &DIAG_FR,
+        "de" => &DIAG_DE,
+        "it" => &DIAG_IT,
+        "zh" => &DIAG_ZH,
+        "ja" => &DIAG_JA,
+        _ => &DIAG_EN,
+    }
+}
+
+/// The diagnostics in the terminal language (see `console_language`).
+pub fn diag_language() -> &'static Diag {
+    diag(terminal_code().as_str())
 }
 
 #[cfg(test)]
@@ -1026,6 +1212,39 @@ mod tests {
             }
         }
         assert!(!table("de").ideas_model_ok && table("en").ideas_model_ok);
+    }
+
+    #[test]
+    fn every_diagnostic_keeps_its_placeholders() {
+        for code in CODES {
+            let d = diag(code);
+            assert!(
+                d.save_reminders.contains("{error}") && d.save_routine.contains("{error}"),
+                "{code}"
+            );
+            assert!(
+                d.save_chat.contains("{error}") && d.move_old.contains("{error}"),
+                "{code}"
+            );
+            assert!(
+                d.install_update.contains("{error}") && d.start_updated.contains("{error}"),
+                "{code}"
+            );
+            assert!(d.activate_safety.contains("{error}"), "{code}");
+            assert!(
+                d.updating.contains("{build}")
+                    && d.updated.contains("{build}")
+                    && d.build_not_started.contains("{build}"),
+                "{code}"
+            );
+            assert!(
+                d.bridge_ready.contains("{port}")
+                    && d.guardian_ready.contains("{port}")
+                    && d.guardian_ready.contains("{model}"),
+                "{code}"
+            );
+            assert!(d.graphics_card.contains("{gpu}"), "{code}");
+        }
     }
 
     #[test]
