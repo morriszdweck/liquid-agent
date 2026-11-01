@@ -203,7 +203,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
     if (!omniUp) return toast("Seeing your screen needs Eyes and ears. Set it up in Settings → Downloads.", "error");
     try {
       const shot = await captureScreen();
-      await addFiles([shot], [`Screen ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.jpg`]);
+      await addFiles([shot], [`Screen ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.png`]);
       if (!text.trim()) setText("What's on my screen?");
       area.current?.focus();
     } catch (e) {

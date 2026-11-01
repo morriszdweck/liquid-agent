@@ -34,6 +34,12 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/** One picture of the whole screen (PNG), taken by the server when the user asks to see their screen. */
+export async function screenshot(): Promise<Blob> {
+  const res = await request("POST", "/api/screen");
+  return res.blob();
+}
+
 export async function upload(file: Blob, name: string) {
   const res = await request("POST", "/api/uploads", undefined, {
     body: file,

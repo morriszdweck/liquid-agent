@@ -1,6 +1,8 @@
 // Microphone capture: 16-bit PCM frames at a chosen rate, plus a loudness level.
 // Camera capture: a live stream for the preview and JPEG snapshots of it.
 
+import captureWorkletUrl from "./capture-worklet.ts?worker&url";
+
 export type Frame = { pcm: Int16Array; rms: number };
 
 export class Mic {
@@ -19,7 +21,7 @@ export class Mic {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     this.ctx = new AudioContext();
-    await this.ctx.audioWorklet.addModule("/capture-worklet.js");
+    await this.ctx.audioWorklet.addModule(captureWorkletUrl);
     const source = this.ctx.createMediaStreamSource(this.stream);
     this.node = new AudioWorkletNode(this.ctx, "capture", { processorOptions: { rate: this.rate } });
     this.node.port.onmessage = (e) => {

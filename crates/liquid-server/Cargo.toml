@@ -1,0 +1,28 @@
+[package]
+name = "liquid-server"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+default-run = "liquid-server"
+
+[dependencies]
+liquid-core = { path = "../liquid-core" }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "process", "time", "fs", "io-util"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+percent-encoding = "2"
+url = "2"
+rand = "0.9"
+walkdir = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+tokio-util = "0.7"
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+flate2 = "1"
+tar = "0.4"
+base64 = "0.22"
+regex = "1"
+libc = "0.2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"

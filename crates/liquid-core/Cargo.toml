@@ -1,0 +1,11 @@
+[package]
+name = "liquid-core"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+url = "2"
+percent-encoding = "2"

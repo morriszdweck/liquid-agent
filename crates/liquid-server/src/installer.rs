@@ -1,0 +1,628 @@
+//! Download and install the local inference engine and model files.
+use crate::{backends, json_response, App};
+use anyhow::{bail, Context, Result};
+use axum::{body::to_bytes, extract::Request, http::StatusCode, response::Response};
+use futures_util::StreamExt;
+use serde_json::{json, Value};
+use std::{
+    collections::{HashSet, VecDeque},
+    path::{Component, Path, PathBuf},
+    time::Duration,
+};
+use tokio::io::AsyncWriteExt;
+use tokio_util::sync::CancellationToken;
+
+#[derive(Default)]
+pub struct InstallState {
+    pub busy: bool,
+    pub queue: VecDeque<String>,
+    pub current: Option<String>,
+    pub cancel: Option<CancellationToken>,
+    pub restart: HashSet<String>,
+    pub suppress_start: HashSet<String>,
+}
+fn answer(status: StatusCode, message: &str) -> Response {
+    json_response(status, json!({"error":message}))
+}
+fn client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .user_agent("liquid-agent/0.2")
+        .connect_timeout(Duration::from_secs(15))
+        .build()?)
+}
+pub(crate) fn hf_base() -> String {
+    std::env::var("LIQUID_AGENT_HF_BASE")
+        .ok()
+        .filter(|s| liquid_core::settings::is_local(s))
+        .unwrap_or_else(|| "https://huggingface.co".into())
+        .trim_end_matches('/')
+        .to_owned()
+}
+fn releases_url() -> String {
+    std::env::var("LIQUID_AGENT_RELEASES_URL")
+        .ok()
+        .filter(|s| liquid_core::settings::is_local(s))
+        .unwrap_or_else(|| {
+            "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10".into()
+        })
+}
+fn emit(app: &App) {
+    app.backends.emit(app);
+}
+
+pub async fn install(app: &App, request: Request) -> Response {
+    let bytes = match to_bytes(request.into_body(), 1_000_000).await {
+        Ok(v) => v,
+        Err(_) => return answer(StatusCode::PAYLOAD_TOO_LARGE, "That request is too big."),
+    };
+    let value: Value = if bytes.is_empty() {
+        json!({})
+    } else {
+        match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => return answer(StatusCode::BAD_REQUEST, "Bad JSON."),
+        }
+    };
+    let ids = value
+        .get("ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    enqueue(app, &ids)
+}
+
+pub fn enqueue(app: &App, ids: &[Value]) -> Response {
+    let settings = app.settings.lock().unwrap().clone();
+    let mut state = app.backends.installs.lock().unwrap();
+    if state
+        .cancel
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return answer(StatusCode::CONFLICT, "Wait for cancellation to finish.");
+    }
+    let mut requested: Vec<String> = ["engine", "small", "omni", "guardian", "browser"]
+        .iter()
+        .filter(|id| ids.iter().any(|v| v.as_str() == Some(**id)))
+        .map(|s| s.to_string())
+        .collect();
+    if requested.iter().any(|id| id == "small" || id == "omni")
+        && !backends::installed(&app.data, &settings, "engine")
+        && !requested.iter().any(|id| id == "engine")
+    {
+        requested.insert(0, "engine".into());
+    }
+    for id in requested {
+        if state.current.as_deref() != Some(&id) && !state.queue.contains(&id) {
+            state.queue.push_back(id);
+        }
+    }
+    if state.busy || state.queue.is_empty() {
+        drop(state);
+        emit(app);
+        return json_response(StatusCode::OK, json!({"ok":true}));
+    }
+    state.busy = true;
+    let cancel = CancellationToken::new();
+    state.cancel = Some(cancel.clone());
+    drop(state);
+    emit(app);
+    let app = app.clone();
+    tokio::spawn(async move {
+        run_queue(app, cancel).await;
+    });
+    json_response(StatusCode::OK, json!({"ok":true}))
+}
+pub fn cancel(app: &App) -> Response {
+    let mut state = app.backends.installs.lock().unwrap();
+    state.queue.clear();
+    state.restart.clear();
+    state.suppress_start.clear();
+    if let Some(token) = &state.cancel {
+        token.cancel();
+    }
+    drop(state);
+    emit(app);
+    json_response(StatusCode::OK, json!({"ok":true}))
+}
+fn store_custom(data: &Path) -> Option<Value> {
+    let v = crate::store::load_or(data, "custom-model.json", Value::Null);
+    if v.get("file").and_then(Value::as_str).is_some() {
+        Some(v)
+    } else {
+        None
+    }
+}
+async fn run_queue(app: App, cancel: CancellationToken) {
+    loop {
+        let id = {
+            let mut s = app.backends.installs.lock().unwrap();
+            if cancel.is_cancelled() {
+                s.queue.clear();
+            }
+            let id = s.queue.pop_front();
+            s.current = id.clone();
+            if id.is_none() {
+                s.busy = false;
+                s.cancel = None;
+            }
+            id
+        };
+        let Some(id) = id else {
+            emit(&app);
+            return;
+        };
+        let settings = app.settings.lock().unwrap().clone();
+        if backends::installed(&app.data, &settings, &id) {
+            let (restart, suppressed) = {
+                let mut state = app.backends.installs.lock().unwrap();
+                (state.restart.remove(&id), state.suppress_start.remove(&id))
+            };
+            if restart && app.backends.active(&id) {
+                let _ = backends::stop_process(&app, &id).await;
+            }
+            if id != "engine" && !suppressed && !app.backends.active(&id) {
+                let _ = backends::action(&app, &id, "start").await;
+            }
+            continue;
+        }
+        if (id == "small" || id == "omni") && !backends::installed(&app.data, &settings, "engine") {
+            app.backends.set(
+                &app,
+                &id,
+                json!({"status":"failed","error":"Install the AI engine first."}),
+            );
+            continue;
+        }
+        let was_live = app.backends.running(&id);
+        app.backends.set(
+            &app,
+            &id,
+            json!({"status":"installing","text":"Starting…","live":was_live}),
+        );
+        let result = install_part(&app, &id, &settings, &cancel).await;
+        if cancel.is_cancelled() {
+            let live = app.backends.running(&id);
+            app.backends.set(&app,&id,json!({"status":if live {"running"} else if backends::installed(&app.data,&settings,&id){"installed"}else{"missing"}}));
+            break;
+        }
+        let (restart, suppressed) = {
+            let mut state = app.backends.installs.lock().unwrap();
+            (state.restart.remove(&id), state.suppress_start.remove(&id))
+        };
+        match result {
+            Ok(()) => {
+                if restart && app.backends.active(&id) {
+                    let _ = backends::stop_process(&app, &id).await;
+                }
+                app.backends.set(&app, &id, json!({"status":"installed"}));
+                if id != "engine" && !suppressed {
+                    let response = backends::action(&app, &id, "start").await;
+                    if !response.status().is_success() {
+                        app.backends.set(&app,&id,json!({"status":"failed","error":"The installed part could not be started."}));
+                    }
+                }
+            }
+            Err(error) => {
+                let message = error.to_string().chars().take(300).collect::<String>();
+                if app.backends.running(&id) {
+                    app.backends.set(&app, &id, json!({"status":"running"}));
+                    app.emit(
+                        json!({"type":"notify","title":"Model download failed","body":message}),
+                    );
+                } else {
+                    app.backends
+                        .set(&app, &id, json!({"status":"failed","error":message}));
+                }
+            }
+        }
+    }
+    {
+        let mut s = app.backends.installs.lock().unwrap();
+        s.busy = false;
+        s.current = None;
+        s.queue.clear();
+        s.restart.clear();
+        s.suppress_start.clear();
+        s.cancel = None;
+    }
+    emit(&app);
+}
+async fn download(
+    app: &App,
+    id: &str,
+    url: &str,
+    dest: &Path,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    if dest.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let partial = PathBuf::from(format!("{}.part", dest.display()));
+    let mut start = tokio::fs::metadata(&partial)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let client = client()?;
+    let send = |start| {
+        let mut req = client.get(url);
+        if url.starts_with(&format!("{}/", hf_base())) {
+            if let Some(token) = std::env::var("HF_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    std::env::var("HUGGING_FACE_HUB_TOKEN")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                })
+            {
+                req = req.bearer_auth(token);
+            }
+        }
+        if start > 0 {
+            req = req.header(reqwest::header::RANGE, format!("bytes={start}-"));
+        }
+        req.send()
+    };
+    let mut res =
+        tokio::select! { _=cancel.cancelled()=>bail!("Cancelled"), result=send(start)=>result? };
+    if res.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        start = 0;
+        res = tokio::select! { _=cancel.cancelled()=>bail!("Cancelled"), result=send(0)=>result? };
+    }
+    if !res.status().is_success() {
+        bail!("Download failed (HTTP {}).", res.status().as_u16());
+    }
+    if start > 0 && res.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        let expected = format!("bytes {start}-");
+        if !res
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|h| h.to_str().ok())
+            .is_some_and(|s| s.starts_with(&expected))
+        {
+            bail!("The download server returned an invalid range.");
+        }
+    } else {
+        start = 0;
+    }
+    let remaining = res.content_length();
+    let total = remaining.map(|n| n + start);
+    let mut written = start;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(start > 0)
+        .truncate(start == 0)
+        .open(&partial)
+        .await?;
+    let mut chunks = res.bytes_stream();
+    let mut last = std::time::Instant::now() - Duration::from_secs(1);
+    loop {
+        let chunk =
+            tokio::select! { _=cancel.cancelled()=>bail!("Cancelled"), chunk=chunks.next()=>chunk };
+        let Some(chunk) = chunk else { break };
+        let chunk = chunk?;
+        file.write_all(&chunk).await?;
+        written += chunk.len() as u64;
+        if last.elapsed() >= Duration::from_millis(250) {
+            let mut state = json!({"status":"installing","text":format!("Downloading {:.1} MB",written as f64/1e6),"live":app.backends.running(id)});
+            if let Some(total) = total.filter(|n| *n > 0) {
+                state["fraction"] = json!((written as f64 / total as f64).min(1.0));
+            }
+            app.backends.set(app, id, state);
+            last = std::time::Instant::now();
+        }
+    }
+    file.flush().await?;
+    drop(file);
+    if total.is_some_and(|n| n != written) {
+        bail!("The download ended early; retry to resume.");
+    }
+    tokio::fs::rename(partial, dest).await?;
+    Ok(())
+}
+async fn install_part(
+    app: &App,
+    id: &str,
+    settings: &Value,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let base = hf_base();
+    match id {
+        "engine" => install_engine(app, cancel).await,
+        "browser" => install_browser(app, cancel).await,
+        "guardian" => {
+            let dir = app.data.join("guardian");
+            for file in ["config.json", "model.safetensors", "tokenizer.json"] {
+                download(
+                    app,
+                    id,
+                    &format!("{base}/ProCreations/auto-150m-3/resolve/main/{file}"),
+                    &dir.join(file),
+                    cancel,
+                )
+                .await?;
+            }
+            tokio::fs::write(dir.join(".ready"), "ProCreations/auto-150m-3").await?;
+            Ok(())
+        }
+        "small" if store_custom(&app.data).is_some() => install_custom(app, cancel).await,
+        "small" | "omni" => {
+            let (repo, prefix, key) = if id == "small" {
+                ("LiquidAI/LFM3-1.7B-GGUF", "LFM3-1.7B-", "smallQuant")
+            } else {
+                ("LiquidAI/LFM3-Omni-2B-GGUF", "LFM3-Omni-2B-", "omniQuant")
+            };
+            let quant = settings
+                .get(key)
+                .and_then(Value::as_str)
+                .context("Invalid model size")?;
+            let allowed = if id == "small" {
+                vec!["QAD-Q4_0", "Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0", "F16"]
+            } else {
+                vec!["Q4_0", "Q4_K_M", "Q8_0", "F16"]
+            };
+            if !allowed.contains(&quant) {
+                bail!("Invalid model size.");
+            }
+            let dir = app.data.join("models");
+            if id == "omni" {
+                let name = "mmproj-LFM3-Omni-2B-Q8_0.gguf";
+                download(
+                    app,
+                    id,
+                    &format!("{base}/{repo}/resolve/main/{name}"),
+                    &dir.join(name),
+                    cancel,
+                )
+                .await?;
+            }
+            let file = format!("{prefix}{quant}.gguf");
+            download(
+                app,
+                id,
+                &format!("{base}/{repo}/resolve/main/{file}"),
+                &dir.join(file),
+                cancel,
+            )
+            .await
+        }
+        _ => bail!("Unsupported part."),
+    }
+}
+async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
+    let client = client()?;
+    let res = tokio::select! { _=cancel.cancelled()=>bail!("Cancelled"), r=client.get(releases_url()).header(reqwest::header::ACCEPT,"application/vnd.github+json").send()=>r? };
+    if !res.status().is_success() {
+        bail!("Couldn't reach GitHub (HTTP {}).", res.status().as_u16());
+    }
+    let releases: Value =
+        tokio::select! { _=cancel.cancelled()=>bail!("Cancelled"), r=res.json()=>r? };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let cpu = format!("bin-ubuntu-{arch}.tar.gz");
+    let vulkan = format!("bin-ubuntu-vulkan-{arch}.tar.gz");
+    let mac = format!("bin-macos-{arch}.tar.gz");
+    let want_vulkan = !cfg!(target_os = "macos")
+        && (std::env::var("LIQUID_AGENT_GPU").as_deref() == Ok("vulkan")
+            || (std::env::var("LIQUID_AGENT_GPU").as_deref() != Ok("cpu")
+                && Path::new("/dev/dri").is_dir()));
+    let mut chosen = None;
+    for release in releases.as_array().context("Invalid engine release list")? {
+        let assets = release
+            .get("assets")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let find = |suffix: &str| {
+            assets
+                .iter()
+                .find(|a| {
+                    a["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("llama-") && name.ends_with(suffix))
+                })
+                .cloned()
+        };
+        let candidate = if cfg!(target_os = "macos") {
+            find(&mac)
+        } else if want_vulkan {
+            find(&vulkan).or_else(|| find(&cpu))
+        } else {
+            find(&cpu)
+        };
+        if candidate.is_some() {
+            chosen = candidate;
+            break;
+        }
+    }
+    let asset = chosen.context("No llama.cpp build for this computer was found.")?;
+    let url = asset["browser_download_url"]
+        .as_str()
+        .context("Invalid engine download URL")?;
+    let archive = app.data.join("tools/llama.tar.gz");
+    download(app, "engine", url, &archive, cancel).await?;
+    app.backends.set(
+        app,
+        "engine",
+        json!({"status":"installing","text":"Unpacking…"}),
+    );
+    let stage = app.data.join("engine.installing");
+    let data = app.data.clone();
+    let token = cancel.clone();
+    let asset_name = asset["name"].as_str().unwrap_or("").to_owned();
+    let archive_for_extract = archive.clone();
+    let extraction = tokio::task::spawn_blocking(move || -> Result<()> {
+        if stage.exists() {
+            std::fs::remove_dir_all(&stage)?;
+        }
+        std::fs::create_dir_all(&stage)?;
+        let decoder = flate2::read::GzDecoder::new(std::fs::File::open(&archive_for_extract)?);
+        let mut tar = tar::Archive::new(decoder);
+        let mut total = 0u64;
+        for entry in tar.entries()? {
+            if token.is_cancelled() {
+                bail!("Cancelled");
+            }
+            let mut entry = entry?;
+            let path = entry.path()?;
+            if path
+                .components()
+                .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+            {
+                bail!("Unsafe engine archive path.");
+            }
+            if let Some(link) = entry.link_name()? {
+                if link
+                    .components()
+                    .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+                {
+                    bail!("Unsafe engine archive link.");
+                }
+            }
+            total = total
+                .checked_add(entry.size())
+                .context("Engine archive is too large")?;
+            if total > 2_000_000_000 {
+                bail!("Engine archive is too large.");
+            }
+            if !entry.unpack_in(&stage)? {
+                bail!("Unsafe engine archive entry.");
+            }
+        }
+        if token.is_cancelled() {
+            bail!("Cancelled");
+        }
+        if !walkdir::WalkDir::new(&stage)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+            .any(|e| e.file_type().is_file() && e.file_name() == "llama-server")
+        {
+            bail!("The download didn't contain llama-server.");
+        }
+        let target = data.join("engine");
+        if target.exists() {
+            if std::fs::read_dir(&target)?.next().is_some() {
+                bail!("The engine folder is not empty; remove the existing engine first.");
+            }
+            std::fs::remove_dir(&target)?;
+        }
+        std::fs::write(
+            stage.join(".flavor"),
+            if asset_name.contains("vulkan") {
+                "vulkan"
+            } else if cfg!(target_os = "macos") {
+                "metal"
+            } else {
+                "cpu"
+            },
+        )?;
+        std::fs::rename(&stage, &target)?;
+        let _ = std::fs::remove_file(&archive_for_extract);
+        Ok(())
+    })
+    .await?;
+    if extraction.is_err() && !cancel.is_cancelled() {
+        let _ = tokio::fs::remove_file(&archive).await;
+    }
+    extraction?;
+    Ok(())
+}
+
+async fn install_browser(app: &App, cancel: &CancellationToken) -> Result<()> {
+    crate::browser_bridge::install(app, cancel).await
+}
+
+async fn install_custom(app: &App, cancel: &CancellationToken) -> Result<()> {
+    let mut custom = store_custom(&app.data).context("No custom model selected")?;
+    let repo = custom["repo"]
+        .as_str()
+        .context("Invalid model repository")?;
+    let parsed = liquid_core::models::parse_hf_link(repo).map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(parsed["repo"] == repo, "Invalid model repository.");
+    let revision = custom["revision"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main");
+    let file = custom["file"].as_str().context("Invalid model file")?;
+    let variant = custom["variants"]
+        .as_array()
+        .context("Invalid model variants")?
+        .iter()
+        .find(|v| v["id"] == file)
+        .context("Invalid model variant")?;
+    anyhow::ensure!(
+        crate::models::safe_variant(variant),
+        "Invalid model variant."
+    );
+    let shards = variant["shards"]
+        .as_array()
+        .filter(|s| !s.is_empty() && s.len() <= 1000)
+        .context("Invalid model shards")?;
+    let dir = app.data.join("models/custom");
+    tokio::fs::create_dir_all(&dir).await?;
+    anyhow::ensure!(
+        tokio::fs::symlink_metadata(&dir)
+            .await?
+            .file_type()
+            .is_dir(),
+        "Unsafe model directory."
+    );
+    let root = dir.canonicalize()?;
+    for shard in shards {
+        let name = shard.as_str().context("Invalid shard")?;
+        let path = Path::new(name);
+        anyhow::ensure!(
+            name.to_ascii_lowercase().ends_with(".gguf")
+                && !path
+                    .components()
+                    .any(|c| !matches!(c, Component::Normal(_))),
+            "Unsafe model path."
+        );
+        let target = root.join(path);
+        let parent = target.parent().context("Invalid model path")?;
+        tokio::fs::create_dir_all(parent).await?;
+        anyhow::ensure!(
+            parent.canonicalize()?.starts_with(&root),
+            "Unsafe model path."
+        );
+        for p in [
+            &target,
+            &PathBuf::from(format!("{}.part", target.display())),
+        ] {
+            if let Ok(meta) = tokio::fs::symlink_metadata(p).await {
+                anyhow::ensure!(meta.file_type().is_file(), "Unsafe model path.");
+            }
+        }
+        let mut url = url::Url::parse(&hf_base())?;
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|_| anyhow::anyhow!("Invalid model URL"))?;
+            segments.pop_if_empty();
+            for part in repo.split('/') {
+                segments.push(part);
+            }
+            segments.push("resolve").push(revision);
+            for part in name.split('/') {
+                segments.push(part);
+            }
+        }
+        download(app, "small", url.as_str(), &target, cancel).await?;
+    }
+    let selected = root.join(file).canonicalize()?;
+    anyhow::ensure!(selected.starts_with(&root), "Unsafe model path.");
+    let meta = tokio::task::spawn_blocking(move || liquid_core::gguf::probe(selected)).await??;
+    anyhow::ensure!(!cancel.is_cancelled(), "Cancelled");
+    custom["meta"] = json!({"architecture":meta.architecture,"contextLength":meta.context_length,"hasTemplate":meta.has_template,"thinking":meta.thinking,"name":meta.name});
+    crate::store::save(&app.data, "custom-model.json", &custom)?;
+    Ok(())
+}

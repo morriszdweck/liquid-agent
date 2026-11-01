@@ -2,22 +2,19 @@
   "name": "liquid-agent",
   "version": "0.2.0",
   "private": true,
-  "type": "module",
-  "description": "A private AI agent for macOS and Linux that runs LFM3 1.7B and LFM3 Omni 2B locally, with a web UI.",
+  "description": "A private AI agent for macOS and Linux that runs LFM3 1.7B and LFM3 Omni 2B locally, with a web UI. The server is Rust.",
   "license": "MIT",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "vite build",
-    "start": "node server/index.js --open",
-    "serve": "node server/index.js",
-    "dev": "vite build --watch --mode development & node --watch-path=server server/index.js",
-    "typecheck": "tsc --noEmit -p web",
-    "test": "node scripts/smoke.mjs"
-  },
-  "dependencies": {
-    "ws": "8.18.0"
+    "build:setup": "vite build --config desktop/setup/vite.config.ts",
+    "start": "npm run build && cargo run --release -p liquid-server -- --open",
+    "serve": "cargo run --release -p liquid-server",
+    "dev": "vite build --watch --mode development & cargo run -p liquid-server",
+    "typecheck": "tsc --noEmit -p web && tsc --noEmit -p desktop/setup",
+    "test": "cargo build -p liquid-server -p liquid-guardian && node scripts/smoke.mjs"
   },
   "devDependencies": {
     "@types/react": "18.3.12",
@@ -34,6 +31,8 @@
     "remark-math": "6.0.0",
     "typescript": "5.6.3",
     "vite": "5.4.10",
+    "ws": "8.18.0",
     "zustand": "4.5.5"
-  }
+  },
+  "type": "module"
 }

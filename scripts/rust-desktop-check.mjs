@@ -1,0 +1,33 @@
+// Exercise desktop actions with fake programs instead of the user's desktop.
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import fs from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import WebSocket from 'ws';
+const repo=fileURLToPath(new URL('..',import.meta.url)),dir=fs.mkdtempSync(path.join(os.tmpdir(),'liquid-desktop-')),data=path.join(dir,'data'),dist=path.join(dir,'dist'),bin=path.join(dir,'bin');
+fs.mkdirSync(dist);fs.writeFileSync(path.join(dist,'index.html'),'<head></head>');fs.mkdirSync(bin);fs.mkdirSync(path.join(data,'engine'),{recursive:true});fs.mkdirSync(path.join(data,'models'));fs.writeFileSync(path.join(data,'models','LFM3-1.7B-Q4_K_M.gguf'),'test');
+const clip=path.join(dir,'clipboard'), log=path.join(dir,'opened'),target=path.join(dir,'sample; touch should-not-exist.txt');fs.writeFileSync(clip,'existing clipboard');fs.writeFileSync(target,'fixture');
+const opener=`#!${process.execPath}\nrequire('fs').appendFileSync(${JSON.stringify(log)},JSON.stringify(process.argv.slice(2))+'\\n');\n`;
+for(const cmd of ['xdg-open','open'])fs.writeFileSync(path.join(bin,cmd),opener,{mode:0o755});
+const clipboard=`#!${process.execPath}\nconst fs=require('fs'),name=require('path').basename(process.argv[1]);const read=name==='pbpaste'||process.argv.includes('-o');if(read)process.stdout.write(fs.readFileSync(${JSON.stringify(clip)}));else{let bytes='';process.stdin.setEncoding('utf8');process.stdin.on('data',b=>bytes+=b);process.stdin.on('end',()=>fs.writeFileSync(${JSON.stringify(clip)},bytes));}\n`;
+for(const cmd of ['xclip','pbpaste','pbcopy'])fs.writeFileSync(path.join(bin,cmd),clipboard,{mode:0o755});
+const engine=path.join(data,'engine','llama-server');fs.writeFileSync(engine,`#!${process.execPath}
+const http=require('http'),i=process.argv.indexOf('--port');http.createServer((q,s)=>{if(q.method==='GET')return s.end('{}');let body='';q.on('data',c=>body+=c);q.on('end',()=>{const messages=JSON.parse(body).messages,request=messages.find(m=>m.role==='user'&&typeof m.content==='string'&&m.content.startsWith('desktop test '))?.content,has=messages.some(m=>m.role==='user'&&typeof m.content==='string'&&m.content.startsWith('[result]'));let call='';if(!has){if(request==='desktop test open')call='<function=open><parameter=target>${target}</parameter></function>';if(request==='desktop test local')call='<function=open><parameter=target>http://127.0.0.1:12345/</parameter></function>';if(request==='desktop test read')call='<function=clipboard></function>';if(request==='desktop test write')call='<function=set_clipboard><parameter=text>new clipboard</parameter></function>';}const content=call?'<tool_call>'+call+'</tool_call>':'done';s.writeHead(200,{'content-type':'text/event-stream'});s.end('data: '+JSON.stringify({choices:[{delta:{content}}]})+'\\n\\ndata: [DONE]\\n\\n');});}).listen(Number(process.argv[i+1]),'127.0.0.1');\n`,{mode:0o755});
+async function free(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;}const port=await free(),modelPort=await free(),base=`http://127.0.0.1:${port}`,sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const env={...process.env,LIQUID_AGENT_NO_AUTOSTART:"1",PATH:`${bin}:${process.env.PATH}`,DISPLAY:':test',WAYLAND_DISPLAY:'',LIQUID_AGENT_RUST_HOME:data,LIQUID_AGENT_WEB_DIST:dist,LIQUID_AGENT_RUST_PORT:String(port),LIQUID_AGENT_SMALL_PORT:String(modelPort)};let app,ws,token='';const check=(ok,msg)=>{if(!ok)throw Error(msg);console.log(`✓ ${msg}`);};
+async function api(route,method='GET',body){const r=await fetch(base+route,{method,headers:{'x-liquid-token':token,'content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});if(!r.ok)throw Error(`${route}: ${r.status} ${await r.text()}`);return r.json();}
+function event(predicate){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{ws.off('message',on);reject(Error('Timed out waiting for desktop action'));},15000);function on(raw){const e=JSON.parse(raw.toString());if(predicate(e)){clearTimeout(timer);ws.off('message',on);resolve(e);}}ws.on('message',on);});}
+async function act(name,approve){const pending=event(e=>e.type==='chat'&&e.chat.messages?.at(-1)?.steps?.some(s=>s.status==='approval'));const chat=await api('/api/chats','POST',{text:`desktop test ${name}`});const step=(await pending).chat.messages.at(-1).steps.find(s=>s.status==='approval');const done=event(e=>e.type==='chat'&&e.chat.id===chat.id&&e.chat.messages.at(-1)?.status==='done');await api(`/api/approvals/${step.id}`,'POST',{approve});return (await done).chat;}
+try {
+ app=spawn(path.join(repo,'target/debug/liquid-server'),[],{env,stdio:['ignore','pipe','pipe']});let stderr='';app.stderr.on('data',d=>stderr+=d);for(let i=0;i<100;i++){try{const html=await(await fetch(base)).text();token=html.match(/name="liquid-token" content="([^"]+)"/)?.[1]||'';if(token)break;}catch{}await sleep(100);}if(!token)throw Error(stderr);
+ ws=new WebSocket(`ws://127.0.0.1:${port}/ws?t=${token}`,{origin:base});await once(ws,'open');await api('/api/settings','PATCH',{smallURL:`http://127.0.0.1:${modelPort}/v1`});await api('/api/parts/small/start','POST');for(let i=0;i<100;i++){if((await api('/api/state')).parts.find(p=>p.id==='small').status==='running')break;await sleep(100);}
+ let chat=await act('open',false);check(chat.messages.at(-1).steps[0].status==='denied'&&!fs.existsSync(log),'Denied desktop opening does not start a program');
+ chat=await act('open',true);check(chat.messages.at(-1).steps[0].status==='done'&&JSON.parse(fs.readFileSync(log,'utf8').trim())[0]===target&&!fs.existsSync(path.join(repo,'should-not-exist.txt')),'Approved opening passes a path as a single argument');
+ chat=await act('local',true);check(chat.messages.at(-1).steps[0].status==='error'&&chat.messages.at(-1).steps[0].result.includes('public websites'),'Desktop opening rejects local web addresses');
+ chat=await act('read',true);check(chat.messages.at(-1).steps[0].result==='existing clipboard','Rust agent reads the clipboard after approval');
+ chat=await act('write',true);check(chat.messages.at(-1).steps[0].status==='done'&&fs.readFileSync(clip,'utf8')==='new clipboard','Rust agent writes the clipboard after approval');
+ await api('/api/reveal','POST');check(JSON.parse(fs.readFileSync(log,'utf8').trim().split('\n').at(-1))[0]===data,'Rust server reveals its data directory');
+}finally{if(ws)ws.terminate();if(app){const exit=once(app,'exit');app.kill('SIGINT');await exit;}fs.rmSync(dir,{recursive:true,force:true});}
