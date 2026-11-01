@@ -391,6 +391,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                 onClick: () => api("PATCH", "/api/settings", { approvalMode: m.value }).catch(errorToast),
               }))}
             />
+            <ProjectPicker chat={chat} />
             <div className="composer-spacer" />
             <button className="round-btn ghost" onClick={startDictation} aria-label="Dictate" title="Dictate">
               <Mic size={17} />
@@ -411,7 +412,6 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
           </div>
         )}
       </div>
-      <ProjectPicker chat={chat} />
     </div>
   );
 }

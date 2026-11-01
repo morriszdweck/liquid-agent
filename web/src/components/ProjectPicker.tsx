@@ -1,4 +1,4 @@
-// "Choose project" under the message box: ties the chat to one folder, and the
+// "Choose project" in the message box's bottom row: ties the chat to one folder, and the
 // agent then works only inside it. Uses the system's folder picker, or a simple
 // folder browser when there isn't one (Linux without zenity or kdialog).
 
@@ -71,7 +71,7 @@ export function ProjectPicker({ chat }: { chat?: Chat }) {
   const label = project ? baseName(project) : "Choose project";
 
   return (
-    <div className="composer-tray">
+    <div className="project-pick">
       <Menu
         side="top"
         width={300}
