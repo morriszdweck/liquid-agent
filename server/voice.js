@@ -329,6 +329,7 @@ export function handleVoice(client) {
     else if (msg.type === "frame" && upstream) onFrame(msg.image);
     else if (msg.type === "text" && String(msg.text ?? "").trim()) typed(String(msg.text).trim());
     else if (msg.type === "cancel") {
+      send({ type: "audio.clear" });
       heard = [];
       if (responding) up({ type: "response.cancel" });
       if (reply) {
