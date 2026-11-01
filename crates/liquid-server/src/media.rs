@@ -23,7 +23,7 @@ pub(crate) fn local_url(settings: &Value) -> Option<url::Url> {
         .then_some(parsed)
 }
 pub(crate) async fn completion(url: &str, audio: &[u8]) -> anyhow::Result<String> {
-    complete(url, json!([{"role":"system","content":"Perform ASR in English."},{"role":"user","content":[{"type":"input_audio","input_audio":{"data":BASE64.encode(audio),"format":"wav"}}]}]), 512).await
+    complete(url, json!([{"role":"system","content":"Transcribe the speech exactly, in the language that is spoken. Do not translate."},{"role":"user","content":[{"type":"input_audio","input_audio":{"data":BASE64.encode(audio),"format":"wav"}}]}]), 512).await
 }
 pub(crate) async fn vision(
     url: &str,
@@ -102,6 +102,12 @@ pub async fn transcribe(app: &App, request: Request) -> Response {
         Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
 }
+/// Read-aloud clips are heard again and checked against the text. The model sometimes drifts into English
+/// or garbles a loanword, so a clip that doesn't match is made again, up to this many times in all.
+const SPEECH_TRIES: usize = 3;
+/// How closely the heard words must match the text, from 0 to 1.
+const SPEECH_MATCH: f64 = 0.8;
+
 pub async fn speak(app: &App, request: Request) -> Response {
     if !app.backends.running("omni") {
         return error(
@@ -139,34 +145,108 @@ pub async fn speak(app: &App, request: Request) -> Response {
         .filter(|v| ["male", "female"].contains(v))
         .or_else(|| settings["voice"].as_str())
         .unwrap_or("female");
-    let request = match client() {
-        Ok(client) => client
-            .post(format!("{}/tts", url.origin().ascii_serialization()))
-            .json(&json!({"input":text,"voice":voice})),
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let res = match request.send().await {
-        Ok(res) => res,
-        Err(e) => return error(StatusCode::BAD_GATEWAY, &e.to_string()),
-    };
-    if !res.status().is_success() {
-        return error(
-            StatusCode::BAD_GATEWAY,
-            &format!("Speech failed (HTTP {}).", res.status().as_u16()),
-        );
+    match speak_checked(&url, &text, voice).await {
+        Ok(wav) => response(StatusCode::OK, "audio/wav", wav),
+        Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
+}
+
+/// One clip from the model's speech route.
+async fn synthesize(url: &url::Url, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
+    let res = client()?
+        .post(format!("{}/tts", url.origin().ascii_serialization()))
+        .json(&json!({"input":text,"voice":voice}))
+        .send()
+        .await?;
+    anyhow::ensure!(
+        res.status().is_success(),
+        "Speech failed (HTTP {}).",
+        res.status().as_u16()
+    );
     let mut stream = res.bytes_stream();
     let mut wav = Vec::new();
     while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(bytes) => {
-                if wav.len() + bytes.len() > 50 * 1024 * 1024 {
-                    return error(StatusCode::BAD_GATEWAY, "Speech response is too large.");
-                }
-                wav.extend_from_slice(&bytes);
-            }
-            Err(e) => return error(StatusCode::BAD_GATEWAY, &e.to_string()),
+        let bytes = chunk?;
+        anyhow::ensure!(
+            wav.len() + bytes.len() <= 50 * 1024 * 1024,
+            "Speech response is too large."
+        );
+        wav.extend_from_slice(&bytes);
+    }
+    Ok(wav)
+}
+
+/// The clip that sounds closest to the text, made again while it doesn't match.
+async fn speak_checked(url: &url::Url, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
+    let mut best: Option<(f64, Vec<u8>)> = None;
+    for _ in 0..SPEECH_TRIES {
+        let wav = synthesize(url, text, voice).await?;
+        // If the model can't hear the clip back, there is nothing to check it against: keep it.
+        let score = match completion(url.as_str(), &wav).await {
+            Ok(heard) => similarity(text, &heard),
+            Err(_) => 1.0,
+        };
+        if best.as_ref().is_none_or(|(s, _)| score > *s) {
+            best = Some((score, wav));
+        }
+        if score >= SPEECH_MATCH {
+            break;
         }
     }
-    response(StatusCode::OK, "audio/wav", wav)
+    Ok(best.map(|(_, wav)| wav).unwrap_or_default())
+}
+
+/// How alike two texts are, ignoring case, spacing and punctuation: 1 is the same, 0 shares nothing.
+pub(crate) fn similarity(a: &str, b: &str) -> f64 {
+    let letters = |t: &str| -> Vec<char> {
+        t.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(|c| c.to_lowercase())
+            .collect()
+    };
+    let (a, b) = (letters(a), letters(b));
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    // Length of the longest common subsequence, one row at a time.
+    let mut prev = vec![0usize; b.len() + 1];
+    for x in &a {
+        let mut row = vec![0usize; b.len() + 1];
+        for (j, y) in b.iter().enumerate() {
+            row[j + 1] = if x == y {
+                prev[j] + 1
+            } else {
+                prev[j + 1].max(row[j])
+            };
+        }
+        prev = row;
+    }
+    2.0 * prev[b.len()] as f64 / (a.len() + b.len()) as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::similarity;
+
+    #[test]
+    fn matches_the_words_and_ignores_case_and_punctuation() {
+        assert_eq!(similarity("Hola, ¿que tal?", "hola que tal"), 1.0);
+        assert!(
+            similarity(
+                "Die Datei liegt im Ordner Downloads.",
+                "Hi, I downloaded them and I opened them yesterday."
+            ) < 0.8
+        );
+        assert!(
+            similarity(
+                "Guten Morgen, wie geht es dir?",
+                "Guten Morgen, wie geht es dir heute?"
+            ) >= 0.8
+        );
+        assert_eq!(similarity("", ""), 1.0);
+        assert_eq!(similarity("abc", ""), 0.0);
+    }
 }

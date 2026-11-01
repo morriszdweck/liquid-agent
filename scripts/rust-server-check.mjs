@@ -372,7 +372,7 @@ try {
   const transcript=await fetch(`${base}/api/transcribe`,{method:"POST",headers:{"x-liquid-token":token,"content-type":"audio/wav"},body:Buffer.from("RIFFtestWAVE")}).then((res)=>res.json());
   check(transcript.text === "Hello friend!","Rust server transcribes audio through the local model");
   const asrRequest=JSON.parse(fs.readFileSync(path.join(dir,"model-request.json"),"utf8"));
-  check(asrRequest.model === "LFM3-Omni-2B" && asrRequest.messages[0].content === "Perform ASR in English." && asrRequest.messages[1].content[0].input_audio.format === "wav","Rust server sends WAV data to the dictation model");
+  check(asrRequest.model === "LFM3-Omni-2B" && asrRequest.messages[0].content === "Transcribe the speech exactly, in the language that is spoken. Do not translate." && asrRequest.messages[1].content[0].input_audio.format === "wav","Rust server sends WAV data to the dictation model");
   const speechResponse=await fetch(`${base}/api/speak`,{method:"POST",headers:{"x-liquid-token":token,"content-type":"application/json"},body:JSON.stringify({text:"Hello",voice:"male"})});
   const speech=Buffer.from(await speechResponse.arrayBuffer()); const speechRequest=JSON.parse(fs.readFileSync(path.join(dir,"tts-request.json"),"utf8"));
   check(speechResponse.headers.get("content-type") === "audio/wav" && speech.toString() === "RIFFtestWAVE" && speechRequest.voice === "male","Rust server requests and returns speech audio");

@@ -604,7 +604,12 @@ async fn respond(
         event = Some(chat.clone());
     }
     if let Err(e) = store::save(&app.data, "chats.json", &json!(*chats)) {
-        eprintln!("Could not save chat: {e}");
+        eprintln!(
+            "{}",
+            liquid_core::i18n::diag_language()
+                .save_chat
+                .replace("{error}", &e.to_string())
+        );
     }
     drop(chats);
     drop(running);

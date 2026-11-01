@@ -94,12 +94,22 @@ pub fn run(args: Vec<String>) -> Result<()> {
     );
     remove(&old)?;
     if let Err(error) = fs::rename(app, &old) {
-        eprintln!("Could not move the old app: {error}");
+        eprintln!(
+            "{}",
+            liquid_core::i18n::diag_language()
+                .move_old
+                .replace("{error}", &error.to_string())
+        );
         start(server, app, server_args)?;
         return Err(error.into());
     }
     if let Err(error) = fs::rename(&next, app) {
-        eprintln!("Could not install the update: {error}");
+        eprintln!(
+            "{}",
+            liquid_core::i18n::diag_language()
+                .install_update
+                .replace("{error}", &error.to_string())
+        );
         fs::rename(&old, app)?;
         start(server, app, server_args)?;
         return Err(error.into());
@@ -107,14 +117,24 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let mut child = match start(server, app, server_args) {
         Ok(child) => Some(child),
         Err(error) => {
-            eprintln!("Could not start updated app: {error}");
+            eprintln!(
+                "{}",
+                liquid_core::i18n::diag_language()
+                    .start_updated
+                    .replace("{error}", &error.to_string())
+            );
             None
         }
     };
     for _ in 0..120 {
         if healthy(port, build) {
             remove(&old)?;
-            println!("Updated to build {build}");
+            println!(
+                "{}",
+                liquid_core::i18n::diag_language()
+                    .updated
+                    .replace("{build}", &build.to_string())
+            );
             return Ok(());
         }
         if child
@@ -126,7 +146,12 @@ pub fn run(args: Vec<String>) -> Result<()> {
         }
         sleep(Duration::from_millis(500));
     }
-    eprintln!("Build {build} did not start; restoring the previous version.");
+    eprintln!(
+        "{}",
+        liquid_core::i18n::diag_language()
+            .build_not_started
+            .replace("{build}", &build.to_string())
+    );
     if let Some(ref mut child) = child {
         let _ = child.kill();
         let _ = child.wait();

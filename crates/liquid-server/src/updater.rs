@@ -393,7 +393,12 @@ pub fn apply(app: &App) -> Value {
         s.ready.unwrap_or(0)
     };
     update_status(app, |s| s.state = "updating");
-    println!("Updating to build {ready_build}");
+    println!(
+        "{}",
+        liquid_core::i18n::diag_language()
+            .updating
+            .replace("{build}", &ready_build.to_string())
+    );
     let guardian = u
         .root
         .join("bin")

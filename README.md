@@ -118,6 +118,10 @@ The interface and the models speak English, Español, Português, Français, Deu
 - **The models' prompts** are in `crates/liquid-core/src/i18n.rs`: the system prompt, the voice instructions, the tool framing, the starter routines, and the words the server shows for each action and approval. Tool names and their arguments stay in English, because they are the protocol the models answer in.
 - **Server messages** (errors shown in the interface) are dictionary entries whose English text matches the server's, in `web/src/i18n/locales/*.ts` under `server.*`.
 
+- **The terminal and log lines** (the launcher, the server's start-up lines, and the messages written to the log) are in the `Console` and `Diag` tables in the same file. Protocol output that other programs read, such as the guardian's JSON replies, stays in English.
+- **Speech**: read-aloud and dictation go through LFM3 Omni 2B. Dictation asks for the words in the language that is spoken, without translating. Read-aloud makes each clip again, up to three times, until the model's own transcript of it matches the text; the closest clip is played.
+- **Known limits**: the speech model sometimes drifts into English or garbles a loanword (for example "Downloads" in German, or "ダウンロード" in Japanese), and it can make factual errors in its answers. Translations have not had a native-speaker review yet; `node scripts/i18n-review.mjs > i18n-review.csv` lists every translated string for one.
+
 To add a language: add its code to `CODES` and its table to `crates/liquid-core/src/i18n.rs` (the compiler lists any missing field), add `web/src/i18n/locales/<code>.ts`, and register it in `LOCALES` in `web/src/i18n/index.ts`.
 
 ## License

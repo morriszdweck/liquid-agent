@@ -165,7 +165,13 @@ fn main() -> Result<()> {
         .classify(&json!({"tool":"Bash", "args":"ls", "request":"List my files.", "history":[]}))?;
     let server =
         Server::http(("127.0.0.1", port)).map_err(|e| anyhow::anyhow!("binding guardian: {e}"))?;
-    eprintln!("[guardian] {model_name} ready at 127.0.0.1:{port}");
+    eprintln!(
+        "{}",
+        liquid_core::i18n::diag_language()
+            .guardian_ready
+            .replace("{model}", &model_name)
+            .replace("{port}", &port.to_string())
+    );
     for mut request in server.incoming_requests() {
         let (status, body) = match (request.method(), request.url()) {
             (&Method::Get, "/health") => (200, json!({"ok":true, "model":model_name})),
