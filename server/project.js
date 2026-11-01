@@ -189,15 +189,27 @@ export function sandboxed(root, shellPath, command) {
 
 /**
  * Without a sandbox, a best-effort check: refuse commands that name a place
- * outside the project (absolute paths, ~, or climbing out with ..).
+ * outside the project: absolute paths, ~, climbing out with .., or a symlink
+ * inside the project that leads out. The agent also asks before every command.
  */
 export function reachesOut(root, command) {
-  const words = String(command).match(/(?:^|[\s=:'"(<>|;&])((?:~|\.\.|\/)[^\s'";|&<>()]*)/g) ?? [];
-  for (const w of words) {
-    const word = w.replace(/^[\s=:'"(<>|;&]/, "");
-    if (/^\/dev\/(null|stdout|stderr|tty)$/.test(word) || /^\/(tmp|usr|bin|sbin|etc|opt|proc)(\/|$)/.test(word)) continue;
+  const words = String(command).match(/[^\s'";|&<>()=`$]+/g) ?? [];
+  for (const word of words) {
+    if (/^-/.test(word) || /^\/dev\/(null|stdout|stderr|tty)$/.test(word) || /^\/(tmp|usr|bin|sbin|etc|opt|proc)(\/|$)/.test(word)) continue;
+    const named = /^(~|\.\.|\/)/.test(word);
     const abs = word.startsWith("~") ? path.join(HOME, word.slice(1)) : path.resolve(root, word);
+    // A plain word only counts when it's something on disk, such as a symlink in the project.
+    if (!named && !lexists(path.resolve(root, word.split("/")[0]))) continue;
     if (!inside(root, abs)) return word;
   }
   return null;
+}
+
+function lexists(p) {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
 }

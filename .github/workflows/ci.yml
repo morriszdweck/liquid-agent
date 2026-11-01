@@ -28,7 +28,8 @@ jobs:
       - name: Project folders keep the agent inside them
         run: |
           if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y bubblewrap; fi
-          node scripts/project-check.mjs --need-sandbox
+          # The arm runner's kernel blocks bubblewrap, so it tests the fallback path check instead.
+          if [ "${{ matrix.os }}" = ubuntu-24.04-arm ]; then node scripts/project-check.mjs; else node scripts/project-check.mjs --need-sandbox; fi
       - run: node scripts/bundle.mjs --build 1 && tar -tzf release/liquid-agent.tar.gz liquid-agent/build.json liquid-agent/node_modules/ws/package.json
 
   bundle:

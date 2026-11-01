@@ -2,14 +2,14 @@
 // repeat until the model answers.
 
 import crypto from "node:crypto";
-import { DEVICE, MODELS, bus, load, saver, settings } from "./core.js";
+import { DEVICE, IS_MAC, MODELS, bus, load, saver, settings } from "./core.js";
 import { backends } from "./backends.js";
 import { classify, hardDeny } from "./guardian.js";
 import { complete, stream } from "./llm.js";
 import { memory } from "./memory.js";
 import { buildWire, systemPrompt } from "./prompt.js";
 import { parseToolCall, visibleText } from "./toolparser.js";
-import { projectFolder, remember as rememberProject } from "./project.js";
+import { projectFolder, remember as rememberProject, sandboxKind } from "./project.js";
 import { activeTools, runTool, toolMap } from "./tools.js";
 import { uploads } from "./uploads.js";
 
@@ -343,6 +343,9 @@ export const agent = {
     const ask = (reason) => this.askUser(chat, step, reason, signal);
     if (tool?.free) return { approved: true, decision: "Automatic" };
     if (hardDeny(step.tool, step.args)) return ask(`This command can change important parts of your ${DEVICE}.`);
+    // In a project without a sandbox, only a path check stands between a command and the rest of the computer.
+    if (chat.project && step.tool === "shell" && !sandboxKind())
+      return ask(IS_MAC ? "This Mac can't sandbox commands, so I check each one with you." : "Install bubblewrap (bwrap) so commands in a project run sandboxed. Until then I check each one with you.");
     if (mode === "askAlways") return ask();
     // A model added from Hugging Face hasn't been tested with these tools, so in Full Auto
     // its actions still go through the safety check, as in Approve for Me.
