@@ -16,11 +16,10 @@ const uid = () => crypto.randomUUID();
 const STOPS = ["<|tool_call_end|>", "</tool_call>"];
 const OPEN = ["pending", "checking", "approval", "running"];
 
-// Small models reach for tools on plain asks ("make a table", "explain X") and
-// every tool signature costs prompt tokens. Offer tools only when the request
-// mentions something a tool is for, or the last reply was already using them.
+// Tools are offered so the model can read/write files, run commands,
+// set reminders, search the web, and answer questions across all languages.
 const TOOL_WORDS =
-  /\b(files?|folders?|desktop|downloads|documents|disk|directory|open|launch|run|command|terminal|shell|install|apps?|mac|linux|computer|search|google|look ?up|web|websites?|site|online|internet|url|links?|browse|browser|click|type into|news|weather|forecast|price|stocks?|score|latest|current|today|tonight|tomorrow|yesterday|now|recent|remind|reminder|remember|forget|recall|clipboard|copy|paste|screen|screenshot|save|read|list|delete|move|rename|battery|wi-?fi|my)\b|[~/]\w|\.[a-z]{2,4}\b/i;
+  /\b(files?|folders?|desktop|downloads?|documents?|disk|directory|directories|open|launch|run|command|terminal|shell|install|apps?|mac|linux|windows|pc|computer|rechner|search|google|look ?up|web|websites?|site|online|internet|url|links?|browse|browser|click|type into|news|weather|forecast|price|stocks?|score|latest|current|today|tonight|tomorrow|yesterday|now|recent|remind|reminder|remember|forget|recall|clipboard|copy|paste|screen|screenshot|save|read|list|delete|move|rename|battery|wi-?fi|my|tools?|werkzeuge?|dateien?|ordner|verzeichnis|ausführen|starten|öffnen|erstellen|speichern|löschen|lesen|schreiben|erinnern|merken|suchen|kopieren|spiel|game|snake|code|skript|script)\b|[~/]\w|\.[a-z]{2,4}\b/i;
 
 /** Some templates leave the thinking in the text instead of reporting it separately. */
 function splitThink(text) {
@@ -31,9 +30,7 @@ function splitThink(text) {
 const joinThoughts = (before, now) => [before, now.trim()].filter(Boolean).join("\n\n");
 
 function wantsTools(chat, request) {
-  if (TOOL_WORDS.test(request.content ?? "")) return true;
-  const prev = chat.messages.filter((m) => m.role === "assistant" && m.status !== "streaming").at(-1);
-  return Boolean(prev?.steps?.length);
+  return true;
 }
 
 let chats = load("chats.json", []).filter((c) => c.source !== "voice" || c.messages.length);

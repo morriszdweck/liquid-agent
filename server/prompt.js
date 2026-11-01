@@ -30,7 +30,7 @@ export function systemPrompt({ tools, omni, query }) {
   const style = "Use Markdown when it helps: headings, lists, tables, fenced code blocks with a language, and $...$ or $$...$$ for math.";
   const toolLines = tools.length
     ? [
-        "Answer chat, math, writing, code and knowledge questions yourself; never search for something you can write or work out. Only when the request needs the ${DEVICE}, files, the web or memory, reply with one call only:",
+        `Answer chat, math, writing, code and knowledge questions yourself; never search for something you can write or work out. Only when the request needs the ${DEVICE}, files, the web or memory, reply with one call only:`,
         xmlCall("NAME", { ARG: "VALUE" }),
         "Tools:",
         ...tools.map(signature),
