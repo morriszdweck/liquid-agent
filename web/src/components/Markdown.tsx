@@ -9,6 +9,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { Check, Copy } from "lucide-react";
 import "katex/dist/katex.min.css";
+import { t, useT } from "../i18n";
 
 // A short ```latex fence holding a formula (not a whole document) is shown as math.
 const MATH_FENCE = /^```(?:latex|tex|math|katex)[ \t]*\n([\s\S]*?)\n?```$/i;
@@ -40,7 +41,9 @@ function text(node: ReactNode): string {
   return "";
 }
 
-export function CopyButton({ value, label = "Copy" }: { value: string; label?: string }) {
+export function CopyButton({ value, label }: { value: string; label?: string }) {
+  // Subscribed, so the label follows the language even inside the memoized renderer.
+  useT();
   const [done, setDone] = useState(false);
   return (
     <button
@@ -52,7 +55,7 @@ export function CopyButton({ value, label = "Copy" }: { value: string; label?: s
       }}
     >
       {done ? <Check size={13} /> : <Copy size={13} />}
-      {done ? "Copied" : label}
+      {done ? t("markdown.copied") : (label ?? t("markdown.copy"))}
     </button>
   );
 }
@@ -65,7 +68,7 @@ const components: Components = {
     return (
       <div className="code-block">
         <div className="code-head">
-          <span>{lang || "code"}</span>
+          <span>{lang || t("markdown.code")}</span>
           <CopyButton value={text(children).replace(/\n$/, "")} />
         </div>
         <pre>{children}</pre>

@@ -1,6 +1,8 @@
 // Talks to the local server. Every call carries the per-launch token the server
 // put in the page, so other websites can't drive the agent.
 
+import { localizeServerError } from "./i18n";
+
 export const token = document.querySelector<HTMLMetaElement>('meta[name="liquid-token"]')?.content ?? "";
 
 export class ApiError extends Error {}
@@ -23,7 +25,7 @@ async function request(method: string, path: string, body?: unknown, init: Reque
     try {
       message = (await res.json()).error ?? message;
     } catch {}
-    throw new ApiError(message);
+    throw new ApiError(localizeServerError(message));
   }
   return res;
 }

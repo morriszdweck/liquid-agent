@@ -83,7 +83,9 @@ pub async fn run(
     let args = &call["args"];
     let id = store::id();
     let started = now();
-    let mut step = json!({"id":id,"tool":name,"args":args,"label":tools::label(name,args),"note":note,"status":"pending","at":started});
+    // The words the user reads are in the language of the chat.
+    let strings = liquid_core::i18n::reply_for(&app.settings.lock().unwrap().clone()).strings;
+    let mut step = json!({"id":id,"tool":name,"args":args,"label":tools::label(strings,name,args),"note":note,"status":"pending","at":started});
     edit_step(app, chat_id, reply_id, &id, step.clone(), true)?;
     if !tools::required(name, args) {
         edit_step(
@@ -177,13 +179,12 @@ pub async fn run(
                     auto = true;
                     model_approved = true;
                 } else {
-                    reason = format!(
-                        "Auto 150M wasn't sure this is safe ({}% risky).",
-                        (score * 100.0).round() as u64
-                    );
+                    reason = strings
+                        .guardian_unsure
+                        .replace("{risk}", &((score * 100.0).round() as u64).to_string());
                 }
             }
-            None => reason = "Auto 150M isn't ready yet, so I need your OK.".into(),
+            None => reason = strings.guardian_unready.into(),
         }
     }
     if auto && !free {
@@ -196,22 +197,21 @@ pub async fn run(
                 }));
         if changed || safety_no_longer_sufficient {
             auto = false;
-            reason = "The approval settings changed, so I need your OK.".into();
+            reason = strings.settings_changed.into();
         }
     }
-    let (approved, decision) = if auto {
-        (
-            true,
-            if free {
-                "Automatic"
-            } else if model_approved {
-                "Auto 150M approved"
-            } else if mode == "fullAuto" && !custom {
-                "Full Auto"
-            } else {
-                "Read-only, safe"
-            },
-        )
+    // decisionBy says who decided, whatever the language: "guardian" (Auto 150M), "you", or "rule" (the settings).
+    let (approved, decision, decided_by) = if auto {
+        let (text, by) = if free {
+            (strings.decided_free, "rule")
+        } else if model_approved {
+            (strings.decided_auto, "guardian")
+        } else if mode == "fullAuto" && !custom {
+            (strings.decided_full, "rule")
+        } else {
+            (strings.decided_safe, "rule")
+        };
+        (true, text, by)
     } else {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         app.approvals.lock().unwrap().insert(id.clone(), sender);
@@ -235,13 +235,15 @@ pub async fn run(
         (
             approved,
             if approved {
-                "You approved"
+                strings.decided_you
             } else {
-                "You said no"
+                strings.decided_no
             },
+            "you",
         )
     };
     step["decision"] = json!(decision);
+    step["decisionBy"] = json!(decided_by);
     if !approved {
         step["status"] = json!("denied");
         edit_step(
@@ -249,18 +251,18 @@ pub async fn run(
             chat_id,
             reply_id,
             &id,
-            json!({"status":"denied","decision":decision}),
+            json!({"status":"denied","decision":decision,"decisionBy":decided_by}),
             false,
         )?;
         record(app, chat_id, &step, None)?;
-        return Ok("The user said no to this action. Don't retry it; tell the user.".into());
+        return Ok(strings.declined.into());
     }
     edit_step(
         app,
         chat_id,
         reply_id,
         &id,
-        json!({"status":"running","decision":decision}),
+        json!({"status":"running","decision":decision,"decisionBy":decided_by}),
         false,
     )?;
     let result = tools::execute(app, name, args, settings, cancel).await;
@@ -291,7 +293,7 @@ pub async fn run(
         chat_id,
         reply_id,
         &id,
-        json!({"status":step["status"],"decision":decision,"result":text,"ms":now().saturating_sub(started)}),
+        json!({"status":step["status"],"decision":decision,"decisionBy":decided_by,"result":text,"ms":now().saturating_sub(started)}),
         false,
     )?;
     record(app, chat_id, &step, Some(ok))?;

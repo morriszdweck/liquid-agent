@@ -88,18 +88,40 @@ pub fn load_chats(dir: &Path) -> io::Result<Vec<Value>> {
 pub fn load_activity(dir: &Path) -> io::Result<Vec<Value>> {
     Ok(array(dir, "activity.v2.json")?.unwrap_or_default())
 }
-pub fn load_routines(dir: &Path) -> io::Result<Vec<Value>> {
+/// The starter routines, in the language of the app. They are written once, the first time.
+pub fn load_routines(dir: &Path, strings: &liquid_core::i18n::Strings) -> io::Result<Vec<Value>> {
     if let Some(routines) = array(dir, "routines.v2.json")? {
         return Ok(routines);
     }
     let mac = cfg!(target_os = "macos");
+    let text = |id: &str| {
+        strings
+            .starters
+            .iter()
+            .find(|(key, _, _)| *key == id)
+            .map(|(_, name, prompt)| (name.to_string(), prompt.to_string()))
+            .unwrap_or_default()
+    };
+    let check = if mac { "check_mac" } else { "check_computer" };
     let templates = [
-        ("Morning briefing", "sun", "#f5a524", "Give me a short morning briefing: today's date, the weather where I live if you know it, and three top news headlines. Search the web for the news.", "08:00", vec![1,2,3,4,5]),
-        ("Tidy Downloads", "folder", "#339cff", "Look at my ~/Downloads folder and suggest how to tidy it: group the files by type and point out old installers and duplicates. Don't move or delete anything yet.", "18:00", vec![5]),
-        ("Today's news", "newspaper", "#a855f7", "Search the web for today's most important news and summarize the five biggest stories in one or two sentences each.", "12:00", vec![0,1,2,3,4,5,6]),
-        (if mac { "Check my Mac" } else { "Check my computer" }, "gauge", "#22c55e", if mac { "Check my Mac's health: free disk space, memory pressure, battery condition and uptime. Use shell commands, then explain the results simply." } else { "Check my computer's health: free disk space, memory use, battery condition if it has one, uptime and failed system services. Use shell commands, then explain the results simply." }, "09:00", vec![1]),
+        ("morning", "sun", "#f5a524", "08:00", vec![1, 2, 3, 4, 5]),
+        ("tidy", "folder", "#339cff", "18:00", vec![5]),
+        (
+            "news",
+            "newspaper",
+            "#a855f7",
+            "12:00",
+            vec![0, 1, 2, 3, 4, 5, 6],
+        ),
+        (check, "gauge", "#22c55e", "09:00", vec![1]),
     ];
-    let routines: Vec<Value> = templates.into_iter().map(|(name,icon,color,prompt,time,days)| json!({"id":id(),"name":name,"icon":icon,"color":color,"prompt":prompt,"schedule":{"enabled":false,"time":time,"days":days},"lastRun":0})).collect();
+    let routines: Vec<Value> = templates
+        .into_iter()
+        .map(|(key, icon, color, time, days)| {
+            let (name, prompt) = text(key);
+            json!({"id":id(),"name":name,"icon":icon,"color":color,"prompt":prompt,"schedule":{"enabled":false,"time":time,"days":days},"lastRun":0})
+        })
+        .collect();
     save(dir, "routines.v2.json", &json!(routines))?;
     Ok(routines)
 }

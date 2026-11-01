@@ -11,6 +11,8 @@ export type Step = {
   status: StepStatus;
   result?: string;
   decision?: string;
+  /** Who decided, whatever the language: "guardian" (Auto 150M), "you", or "rule" (the settings). */
+  decisionBy?: string;
   reason?: string;
   pDeny?: number;
   at: number;
@@ -100,6 +102,10 @@ export type ApprovalMode = "askAlways" | "approveForMe" | "fullAuto";
 
 export type Settings = {
   userName: string;
+  /** "auto" follows the browser; otherwise a language code the app is written in. */
+  language: string;
+  /** The language the interface is showing, which the server uses for its own wording. */
+  uiLanguage: string;
   personality: "friendly" | "concise" | "playful" | "professional";
   approvalMode: ApprovalMode;
   theme: "system" | "light" | "dark";
@@ -140,6 +146,8 @@ export type ActivityEntry = {
   tool: string;
   label: string;
   decision?: string;
+  /** Who decided, whatever the language: "guardian" (Auto 150M), "you", or "rule" (the settings). */
+  decisionBy?: string;
   ok: boolean | null;
   pDeny?: number;
 };

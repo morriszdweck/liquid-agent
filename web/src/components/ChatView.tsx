@@ -34,6 +34,7 @@ import { Markdown } from "./Markdown";
 import { TopBar } from "./Shell";
 import { Steps } from "./Steps";
 import { Empty, IconButton } from "./ui";
+import { localizeServerError, t } from "../i18n";
 
 export function ChatView({ chatId }: { chatId?: string }) {
   const chat = useStore((s) => s.chats.find((c) => c.id === chatId));
@@ -43,10 +44,10 @@ export function ChatView({ chatId }: { chatId?: string }) {
     return (
       <div className="page">
         <TopBar />
-        <Empty icon={<FileText size={22} />} title="This chat isn't here anymore">
-          It may have been deleted.
+        <Empty icon={<FileText size={22} />} title={t("chat.missingTitle")}>
+          {t("chat.missingBody")}
           <button className="btn primary" onClick={() => go("#/")}>
-            Start a new chat
+            {t("chat.startNew")}
           </button>
         </Empty>
       </div>
@@ -58,17 +59,18 @@ export function ChatView({ chatId }: { chatId?: string }) {
 
 // ---- Empty state ----
 
-export const STARTERS = [
-  { title: "Tidy my Downloads", prompt: "Look at my Downloads folder and suggest how to tidy it up." },
-  { title: "Today's weather", prompt: "What's the weather like today where I am?" },
-  { title: "Explain with a table", prompt: "Compare tea and coffee in a table: caffeine, taste, health." },
-  { title: "Help me write", prompt: "Help me write a short, friendly message to say thanks to a friend." },
+/** Starter cards. Their prompts are what gets sent to the model, so they are written in the user's language. */
+export const starters = () => [
+  { title: t("starter.tidy.title"), prompt: t("starter.tidy.prompt") },
+  { title: t("starter.weather.title"), prompt: t("starter.weather.prompt") },
+  { title: t("starter.table.title"), prompt: t("starter.table.prompt") },
+  { title: t("starter.write.title"), prompt: t("starter.write.prompt") },
 ];
 
 function Welcome({ chat }: { chat?: Chat }) {
   const { settings, ideas, parts, routines } = useStore();
   const ready = modelsReady(parts);
-  const cards = (ideas.items.length ? ideas.items : STARTERS).slice(0, 4);
+  const cards = (ideas.items.length ? ideas.items : starters()).slice(0, 4);
 
   const start = (text: string) => api<Chat>("POST", "/api/chats", { text }).then((c) => go(`#/chat/${c.id}`), errorToast);
 
@@ -78,14 +80,14 @@ function Welcome({ chat }: { chat?: Chat }) {
       <div className="welcome">
         <div className="welcome-inner">
           <h1 className="welcome-title">{greeting(settings?.userName ?? "")}</h1>
-          <p className="welcome-sub">{ready ? "What can I help with?" : "Your models are starting up. You can type now."}</p>
+          <p className="welcome-sub">{ready ? t("welcome.ready") : t("welcome.starting")}</p>
           <Composer chat={chat} autoFocus />
           <div className="chips">
             <button className="chip" onClick={() => go("#/voice")}>
-              <AudioLines size={15} /> Talk to me
+              <AudioLines size={15} /> {t("welcome.talk")}
             </button>
-            <button className="chip" onClick={() => start("Look at my screen and tell me what you see.")}>
-              <Monitor size={15} /> Look at my screen
+            <button className="chip" onClick={() => start(t("welcome.screenPrompt"))}>
+              <Monitor size={15} /> {t("welcome.screen")}
             </button>
             {routines.slice(0, 2).map((r) => (
               <button key={r.id} className="chip" onClick={() => api<{ id: string }>("POST", `/api/routines/${r.id}/run`).then((c) => go(`#/chat/${c.id}`), errorToast)}>
@@ -103,7 +105,7 @@ function Welcome({ chat }: { chat?: Chat }) {
           </div>
           {ideas.items.length > 0 && (
             <button className="link welcome-more" onClick={() => go("#/foryou")}>
-              <Sparkles size={13} /> More ideas for you
+              <Sparkles size={13} /> {t("welcome.moreIdeas")}
             </button>
           )}
         </div>
@@ -154,7 +156,7 @@ function Conversation({ chat }: { chat: Chat }) {
   };
 
   const remove = async () => {
-    if (!confirm(`Delete “${chat.title}”? This can't be undone.`)) return;
+    if (!confirm(t("chat.deleteConfirm", { title: chat.title }))) return;
     await api("DELETE", `/api/chats/${chat.id}`).catch(errorToast);
     go("#/");
   };
@@ -166,14 +168,14 @@ function Conversation({ chat }: { chat: Chat }) {
         onRename={(title) => api("PATCH", `/api/chats/${chat.id}`, { title }).catch(errorToast)}
         menu={[
           {
-            label: chat.pinned ? "Unpin" : "Pin",
+            label: chat.pinned ? t("sidebar.unpin") : t("sidebar.pin"),
             icon: chat.pinned ? <PinOff size={15} /> : <Pin size={15} />,
             onClick: () => api("PATCH", `/api/chats/${chat.id}`, { pinned: !chat.pinned }).catch(errorToast),
           },
-          { label: "Export as Markdown", icon: <Download size={15} />, onClick: () => download(`${chat.title}.md`, chatMarkdown(chat)) },
-          { label: "Continue by voice", icon: <AudioLines size={15} />, onClick: () => go(`#/voice/${chat.id}`) },
+          { label: t("sidebar.exportMarkdown"), icon: <Download size={15} />, onClick: () => download(`${chat.title}.md`, chatMarkdown(chat)) },
+          { label: t("chat.continueVoice"), icon: <AudioLines size={15} />, onClick: () => go(`#/voice/${chat.id}`) },
           "divider",
-          { label: "Delete", icon: <Trash2 size={15} />, danger: true, onClick: remove },
+          { label: t("common.delete"), icon: <Trash2 size={15} />, danger: true, onClick: remove },
         ]}
       />
       <div className="thread" ref={scroller} onScroll={onScroll}>
@@ -195,7 +197,7 @@ function Conversation({ chat }: { chat: Chat }) {
               pinned.current = true;
               scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
             }}
-            aria-label="Scroll to the newest message"
+            aria-label={t("chat.scrollNewest")}
           >
             <ArrowDown size={16} />
           </button>
@@ -271,10 +273,10 @@ function UserMessage({ chat, message, busy, onZoom }: { chat: Chat; message: Mes
           />
           <div className="bubble-edit-actions">
             <button className="btn" onClick={() => setEditing(false)}>
-              Cancel
+              {t("common.cancel")}
             </button>
             <button className="btn primary" onClick={save}>
-              Send
+              {t("common.send")}
             </button>
           </div>
         </div>
@@ -289,7 +291,7 @@ function UserMessage({ chat, message, busy, onZoom }: { chat: Chat; message: Mes
       {!editing && (
         <div className="msg-actions">
           <IconButton
-            label={copied ? "Copied" : "Copy"}
+            label={copied ? t("common.copied") : t("common.copy")}
             onClick={() => {
               navigator.clipboard.writeText(message.content);
               setCopied(true);
@@ -300,7 +302,7 @@ function UserMessage({ chat, message, busy, onZoom }: { chat: Chat; message: Mes
           </IconButton>
           {!busy && (
             <IconButton
-              label="Edit"
+              label={t("common.edit")}
               onClick={() => {
                 setText(message.content);
                 setEditing(true);
@@ -316,7 +318,7 @@ function UserMessage({ chat, message, busy, onZoom }: { chat: Chat; message: Mes
 }
 
 /** What LFM3 1.7B shows while it reasons before answering. */
-const THINKING = "Thinking for a better answer…";
+const thinkingText = () => t("thinking.better");
 
 /** The reasoning behind an answer: one closed line, which opens when you tap it. */
 function Thoughts({ text, ms, active }: { text: string; ms?: number; active: boolean }) {
@@ -327,9 +329,9 @@ function Thoughts({ text, ms, active }: { text: string; ms?: number; active: boo
   }, [text, active, open]);
   return (
     <div className={cx("thoughts", open && "open", active && "active")}>
-      <button className="thoughts-head" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? "Hide reasoning" : "Show reasoning"}>
+      <button className="thoughts-head" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? t("thoughts.hide") : t("thoughts.show")}>
         <Lightbulb size={14} />
-        <span className={active ? "shimmer" : undefined}>{active ? THINKING : ms ? `Thought for ${duration(ms)}` : "Thoughts"}</span>
+        <span className={active ? "shimmer" : undefined}>{active ? thinkingText() : ms ? t("thoughts.took", { time: duration(ms) }) : t("thoughts.label")}</span>
         <ChevronRight size={14} className="thoughts-chev" />
       </button>
       {open && (
@@ -359,7 +361,7 @@ function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: 
     <div className={cx("msg assistant", streaming && "streaming")}>
       {message.voice && (
         <div className="voice-tag">
-          <AudioLines size={12} /> Voice
+          <AudioLines size={12} /> {t("msg.voice")}
         </div>
       )}
       {thought && <Thoughts text={thought} ms={message.thinkingMs} active={thinkingNow} />}
@@ -367,18 +369,18 @@ function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: 
       {thinking && !thinkingNow && (
         <div className="thinking">
           <span className="thinking-dot" />
-          <span className="shimmer">{steps.length ? "Reading the results" : message.model === "small" ? THINKING : "Thinking"}</span>
+          <span className="shimmer">{steps.length ? t("thinking.readingResults") : message.model === "small" ? thinkingText() : t("thinking.plain")}</span>
         </div>
       )}
       {text && <Markdown streaming={streaming}>{text}</Markdown>}
-      {message.interrupted && <div className="msg-note">You interrupted.</div>}
-      {message.status === "stopped" && <div className="msg-note">Stopped.</div>}
+      {message.interrupted && <div className="msg-note">{t("msg.interrupted")}</div>}
+      {message.status === "stopped" && <div className="msg-note">{t("msg.stopped")}</div>}
       {message.status === "error" && (
         <div className="msg-error">
-          <span>{message.error || "Something went wrong."}</span>
+          <span>{message.error ? localizeServerError(message.error) : t("msg.error")}</span>
           {last && !busy && (
             <button className="btn small" onClick={() => api("POST", `/api/chats/${chat.id}/regenerate`).catch(errorToast)}>
-              <RefreshCw size={13} /> Try again
+              <RefreshCw size={13} /> {t("msg.tryAgain")}
             </button>
           )}
         </div>
@@ -388,7 +390,7 @@ function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: 
           {message.content && (
             <>
               <IconButton
-                label={copied ? "Copied" : "Copy"}
+                label={copied ? t("common.copied") : t("common.copy")}
                 onClick={() => {
                   navigator.clipboard.writeText(message.content);
                   setCopied(true);
@@ -397,19 +399,19 @@ function AssistantMessage({ chat, message, last, busy }: { chat: Chat; message: 
               >
                 {copied ? <Check size={15} /> : <Copy size={15} />}
               </IconButton>
-              <IconButton label={speaking ? "Stop reading" : "Read aloud"} active={speaking} onClick={() => (speaking ? stopSpeaking() : speak(message.id, message.content))}>
+              <IconButton label={speaking ? t("msg.stopReading") : t("msg.readAloud")} active={speaking} onClick={() => (speaking ? stopSpeaking() : speak(message.id, message.content))}>
                 {speaking ? <Square size={13} fill="currentColor" /> : <Volume2 size={15} />}
               </IconButton>
             </>
           )}
           {last && !busy && (
-            <IconButton label="Try again" onClick={() => api("POST", `/api/chats/${chat.id}/regenerate`).catch(errorToast)}>
+            <IconButton label={t("msg.tryAgain")} onClick={() => api("POST", `/api/chats/${chat.id}/regenerate`).catch(errorToast)}>
               <RefreshCw size={15} />
             </IconButton>
           )}
           {message.stats && (message.stats.tps > 0 || message.stats.ms > 0) && (
-            <span className="msg-stats" title={`${message.stats.tokens} tokens`}>
-              {[message.stats.tps > 0 && `${message.stats.tps} tok/s`, message.stats.ms > 0 && duration(message.stats.ms)].filter(Boolean).join(" · ")}
+            <span className="msg-stats" title={t("msg.tokens", { n: message.stats.tokens })}>
+              {[message.stats.tps > 0 && t("msg.tokensPerSecond", { n: message.stats.tps }), message.stats.ms > 0 && duration(message.stats.ms)].filter(Boolean).join(" · ")}
             </span>
           )}
         </div>

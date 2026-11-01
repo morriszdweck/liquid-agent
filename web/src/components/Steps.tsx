@@ -30,6 +30,7 @@ import {
 import type { Step } from "../types";
 import { cx, duration } from "../util";
 import { Spinner } from "./ui";
+import { argLabel, localizeServerError, t } from "../i18n";
 
 const ICONS: Record<string, typeof Terminal> = {
   shell: Terminal,
@@ -58,11 +59,11 @@ export function ToolIcon({ tool, size = 15 }: { tool: string; size?: number }) {
   return <Icon size={size} className="tool-icon" />;
 }
 
-const WAITING: Record<string, string> = {
-  pending: "Getting ready",
-  checking: "Auto 150M is checking",
-  approval: "Waiting for you",
-  running: "Working",
+const WAITING: Record<string, () => string> = {
+  pending: () => t("steps.getReady"),
+  checking: () => t("steps.checking"),
+  approval: () => t("steps.waitingYou"),
+  running: () => t("steps.working"),
 };
 
 function StepRow({ step }: { step: Step }) {
@@ -72,7 +73,7 @@ function StepRow({ step }: { step: Step }) {
   const failed = step.status === "error";
   const expandable = !!step.result || Object.keys(step.args).length > 0;
   const args = Object.entries(step.args)
-    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .map(([k, v]) => `${argLabel(k)}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
     .join("\n");
 
   return (
@@ -84,10 +85,10 @@ function StepRow({ step }: { step: Step }) {
         </span>
         <ToolIcon tool={step.tool} />
         <span className="step-label">{step.label}</span>
-        {busy && <span className="step-wait">{WAITING[step.status]}…</span>}
+        {busy && <span className="step-wait">{WAITING[step.status]()}…</span>}
         {!busy && step.decision && (
-          <span className={cx("pill", denied ? "pill-bad" : step.decision.startsWith("Auto ") ? "pill-accent" : "pill-muted")}>
-            {step.decision.startsWith("Auto ") && <ShieldCheck size={11} />}
+          <span className={cx("pill", denied ? "pill-bad" : step.decisionBy === "guardian" ? "pill-accent" : "pill-muted")}>
+            {step.decisionBy === "guardian" && <ShieldCheck size={11} />}
             {step.decision}
           </span>
         )}
@@ -98,7 +99,7 @@ function StepRow({ step }: { step: Step }) {
         <div className="step-detail">
           {args && <pre className="step-args">{args}</pre>}
           {step.reason && <div className="step-reason">{step.reason}</div>}
-          {step.result && <pre className="step-output">{step.result}</pre>}
+          {step.result && <pre className="step-output">{localizeServerError(step.result)}</pre>}
         </div>
       )}
     </div>
@@ -113,8 +114,8 @@ export function Steps({ steps, working, ms }: { steps: Step[]; working: boolean;
   if (!steps.length) return null;
   const failed = steps.filter((s) => s.status === "error" || s.status === "denied").length;
   const summary = working
-    ? "Working…"
-    : `Worked for ${duration(ms ?? 0)} · ${steps.length} ${steps.length === 1 ? "step" : "steps"}${failed ? ` · ${failed} skipped` : ""}`;
+    ? `${t("steps.working")}…`
+    : `${t("steps.workedFor", { time: duration(ms ?? 0) })} · ${steps.length === 1 ? t("steps.one") : t("steps.count", { n: steps.length })}${failed ? ` · ${t("steps.skipped", { n: failed })}` : ""}`;
 
   return (
     <div className={cx("steps", open && "open")}>

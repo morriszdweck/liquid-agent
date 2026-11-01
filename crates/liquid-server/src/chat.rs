@@ -40,34 +40,41 @@ fn wire(
         .and_then(|m| m["content"].as_str())
         .unwrap_or("");
     let relevant = liquid_core::memory::search(facts, query, 4);
-    let personality = match settings["personality"].as_str().unwrap_or("") {
-        "friendly" => "Be warm, clear and patient. Explain simply.",
-        "concise" => "Be extremely brief. No filler.",
-        "playful" => "Be witty and fun, but still helpful.",
-        "professional" => "Be precise and professional.",
-        _ => "",
-    };
-    let mut system = format!("You are Liquid Agent, a private assistant running locally. {personality} Use Markdown when it helps.");
+    // The language the reply is written in, and the words the prompts use for it.
+    let reply = liquid_core::i18n::reply_for(settings);
+    let s = reply.strings;
+    let personality = reply.personality(settings["personality"].as_str().unwrap_or(""));
+    let mut system = [
+        s.persona.to_owned(),
+        reply.directive(),
+        personality.to_owned(),
+        s.markdown.to_owned(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
     if offer_tools {
-        system.push_str("\n");
-        system.push_str(crate::tools::PROMPT);
+        system.push('\n');
+        system.push_str(&crate::tools::prompt(s));
         if browser {
-            system.push_str(crate::tools::BROWSER_PROMPT);
+            system.push_str(&crate::tools::browser_prompt(s));
         }
         if vision {
-            system.push_str(crate::tools::VISION_PROMPT);
+            system.push_str(&crate::tools::vision_prompt(s));
         }
     } else {
-        system.push_str(" Answer directly. Tools are not available for this request; never claim to have executed an action.");
+        system.push_str(s.direct);
     }
     if omni {
-        system.push_str(" You can see and hear attachments.");
+        system.push_str(s.attachments);
     }
     if let Some(name) = settings["userName"].as_str().filter(|n| !n.is_empty()) {
-        system.push_str(&format!(" The user's name is {name}."));
+        system.push_str(&s.user_name.replace("{name}", name));
     }
     if !relevant.is_empty() {
-        system.push_str(&format!("\nUser facts: {}", relevant.join("; ")));
+        system.push('\n');
+        system.push_str(&s.user_facts.replace("{facts}", &relevant.join("; ")));
     }
     let budget = settings["contextBudget"]
         .as_u64()
@@ -217,6 +224,24 @@ fn wants_tools(request: &str, chat: &Value) -> bool {
 }
 
 // Keep partial tool calls out of streamed prose. Actions are not yet supported.
+/// Some templates leave the model's thinking in the text, closed by </think>, instead of reporting
+/// it separately. Returns (the answer, the thinking).
+fn split_thinking(text: &str) -> (&str, &str) {
+    if let Some(end) = text.find("</think>") {
+        let before = &text[..end];
+        let thinking = before
+            .trim_start()
+            .strip_prefix("<think>")
+            .unwrap_or(before)
+            .trim();
+        return (text[end + "</think>".len()..].trim_start(), thinking);
+    }
+    match text.trim_start().strip_prefix("<think>") {
+        Some(rest) => ("", rest.trim()),
+        None => (text, ""),
+    }
+}
+
 fn visible_text(text: &str) -> (&str, bool) {
     let mut cut = text.len();
     let mut found = false;
@@ -499,15 +524,18 @@ async fn respond(
         for step_index in 0..=max_steps {
             content.clear();
             stream(&app, &chat_id, &reply_id, &settings, messages.clone(), &cancel, &mut content, &mut reasoning, &mut tokens, model).await?;
-            let parsed = liquid_core::toolparser::parse(&content, &descriptors);
+            let (answer, _) = split_thinking(&content);
+            let parsed = liquid_core::toolparser::parse(answer, &descriptors);
             let note = parsed["text"].as_str().unwrap_or("").to_owned();
             if parsed["call"].is_null() {
-                if visible_text(&content).1 { anyhow::bail!("Tool actions are not available for this request."); }
-                content = if note.is_empty() { "I couldn't come up with a reply. Try asking another way.".into() } else { note };
+                let strings = liquid_core::i18n::reply_for(&settings).strings;
+                if visible_text(&content).1 { anyhow::bail!("{}", strings.tools_unavailable); }
+                content = if note.is_empty() { strings.no_reply.into() } else { note };
                 return Ok(());
             }
             if step_index == max_steps {
-                content = format!("{}I stopped after {max_steps} steps. Say **continue** if you want me to keep going.", if note.is_empty() { String::new() } else { format!("{note}\n\n") });
+                let strings = liquid_core::i18n::reply_for(&settings).strings;
+                content = format!("{}{}", if note.is_empty() { String::new() } else { format!("{note}\n\n") }, strings.step_limit.replace("{n}", &max_steps.to_string()));
                 return Ok(());
             }
             let call = parsed["call"].clone();
@@ -541,9 +569,15 @@ async fn respond(
             .and_then(|m| m.iter_mut().find(|m| m["id"] == reply_id))
         {
             reply["status"] = json!(status);
-            reply["content"] = json!(content.trim());
-            if !reasoning.trim().is_empty() {
-                reply["thinking"] = json!(reasoning.trim());
+            let (answer, leaked) = split_thinking(&content);
+            reply["content"] = json!(answer.trim());
+            let thinking = if reasoning.trim().is_empty() {
+                leaked
+            } else {
+                reasoning.trim()
+            };
+            if !thinking.is_empty() {
+                reply["thinking"] = json!(thinking);
             }
             if let Err(ref message) = output {
                 if status == "error" {
@@ -654,9 +688,37 @@ async fn stream(
             {
                 *tokens = value;
             }
-            let (visible, _) = visible_text(content);
-            app.emit(json!({"type":"delta","chatId":chat_id,"messageId":reply_id,"text":visible,"thinking":reasoning}));
+            let (answer, leaked) = split_thinking(content);
+            let (visible, _) = visible_text(answer);
+            let thinking = if reasoning.is_empty() {
+                leaked
+            } else {
+                reasoning.as_str()
+            };
+            app.emit(json!({"type":"delta","chatId":chat_id,"messageId":reply_id,"text":visible,"thinking":thinking}));
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_thinking;
+
+    #[test]
+    fn splits_thinking_that_a_template_left_in_the_text() {
+        assert_eq!(
+            split_thinking("A plan</think>The answer"),
+            ("The answer", "A plan")
+        );
+        assert_eq!(
+            split_thinking("<think>A plan</think>\nThe answer"),
+            ("The answer", "A plan")
+        );
+        assert_eq!(
+            split_thinking("<think>still thinking"),
+            ("", "still thinking")
+        );
+        assert_eq!(split_thinking("Just an answer"), ("Just an answer", ""));
+    }
 }

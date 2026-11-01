@@ -7,6 +7,8 @@ import { errorToast, go, pendingApprovals, useStore } from "../store";
 import { Spinner } from "./ui";
 import { ToolIcon } from "./Steps";
 import { IS_MAC } from "../util";
+import { argLabel } from "../i18n";
+import { t } from "../i18n";
 
 export function ApprovalDock({ chatId, showChat }: { chatId?: string; showChat?: boolean }) {
   const chats = useStore((s) => s.chats);
@@ -46,14 +48,14 @@ export function ApprovalDock({ chatId, showChat }: { chatId?: string; showChat?:
   }
 
   return (
-    <div className="approval" role="alertdialog" aria-label="Approval needed">
+    <div className="approval" role="alertdialog" aria-label={t("approval.needed")}>
       <div className="approval-head">
         <span className="approval-icon">
           <ShieldAlert size={16} />
         </span>
         <div className="approval-title">
-          <strong>Allow this?</strong>
-          {pending.length > 1 && <span className="approval-count">1 of {pending.length}</span>}
+          <strong>{t("approval.question")}</strong>
+          {pending.length > 1 && <span className="approval-count">{t("approval.count", { n: 1, total: pending.length })}</span>}
         </div>
         {showChat && (
           <button className="link" onClick={() => go(`#/chat/${chat.id}`)}>
@@ -67,17 +69,17 @@ export function ApprovalDock({ chatId, showChat }: { chatId?: string; showChat?:
       </div>
       {args.length > 0 && (
         <pre className="approval-args">
-          {args.map(([k, v]) => (args.length === 1 ? String(v) : `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)).join("\n")}
+          {args.map(([k, v]) => (args.length === 1 ? String(v) : `${argLabel(k)}: ${typeof v === "string" ? v : JSON.stringify(v)}`)).join("\n")}
         </pre>
       )}
       {step.reason && <div className="approval-reason">{step.reason}</div>}
       <div className="approval-buttons">
         <button className="btn" disabled={!!sending} onClick={() => answer(step.id, false)}>
-          Don't allow
+          {t("approval.deny")}
         </button>
         <button className="btn primary" disabled={!!sending} onClick={() => answer(step.id, true)}>
           {sending === step.id ? <Spinner size={13} /> : null}
-          Allow
+          {t("approval.allow")}
           <kbd>{IS_MAC ? "⌘↵" : "Ctrl+Enter"}</kbd>
         </button>
       </div>

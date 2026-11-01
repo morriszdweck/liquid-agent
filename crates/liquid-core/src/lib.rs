@@ -88,6 +88,7 @@ mod tests {
 }
 
 pub mod gguf;
+pub mod i18n;
 pub mod memory;
 pub mod models;
 pub mod routines;

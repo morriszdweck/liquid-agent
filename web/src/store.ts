@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { socketURL, token } from "./api";
+import { localizeServerError, t } from "./i18n";
 import type { ActivityEntry, Chat, Idea, Part, Reminder, Routine, Settings, Snapshot, Step, Update } from "./types";
 
 export type Toast = { id: number; text: string; tone?: "error" | "info" };
@@ -104,7 +105,7 @@ export function toast(text: string, tone: Toast["tone"] = "info") {
   setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), tone === "error" ? 6000 : 3500);
 }
 
-export const errorToast = (e: unknown) => toast(e instanceof Error ? e.message : String(e), "error");
+export const errorToast = (e: unknown) => toast(localizeServerError(e instanceof Error ? e.message : String(e)), "error");
 
 // ---- Desktop notifications when the tab is in the background ----
 
@@ -201,13 +202,17 @@ function onEvent(e: Event) {
     case "activity.cleared":
       set({ activity: [] });
       break;
-    case "notify":
-      if (e.kind === "done" || e.kind === "approval" || e.kind === "routine") notify(e.title, e.body, e.chatId);
+    case "notify": {
+      // The server's titles and notes come in English; they are shown in the language of the interface.
+      const title = localizeServerError(e.title);
+      const body = localizeServerError(e.body);
+      if (e.kind === "done" || e.kind === "approval" || e.kind === "routine") notify(title, body, e.chatId);
       else {
-        toast(`${e.title}: ${e.body}`);
-        notify(e.title, e.body, e.chatId);
+        toast(`${title}: ${body}`);
+        notify(title, body, e.chatId);
       }
       break;
+    }
   }
 }
 
@@ -241,7 +246,7 @@ function noteUpdated(update: Update | undefined) {
   try {
     const seen = Number(sessionStorage.getItem("la:build"));
     sessionStorage.setItem("la:build", String(update.build));
-    if (seen && update.build > seen) toast("Liquid Agent updated itself.");
+    if (seen && update.build > seen) toast(t("app.updated"));
   } catch {}
 }
 

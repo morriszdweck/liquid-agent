@@ -7,6 +7,7 @@ mod chat;
 #[cfg(test)]
 mod desktop_check;
 mod guardian;
+mod ideas;
 mod installer;
 mod media;
 mod models;
@@ -102,10 +103,13 @@ impl App {
 }
 
 fn defaults(home: &str) -> Value {
-    json!({"userName":"", "personality":"friendly", "approvalMode":"askAlways", "theme":"system", "voice":"female", "speakReplies":false, "autoUpdate":true, "workspace":home, "guardianThreshold":0.5, "contextBudget":6000, "toolOutputLimit":1200, "maxSteps":8, "temperature":0.3, "smallQuant":"Q4_K_M", "omniQuant":"Q4_K_M", "smallURL":"http://127.0.0.1:8180/v1", "omniURL":"http://127.0.0.1:8181/v1", "guardianURL":"http://127.0.0.1:8766", "browserURL":"http://127.0.0.1:8767"})
+    json!({"userName":"", "language":"auto", "uiLanguage":"en", "personality":"friendly", "approvalMode":"askAlways", "theme":"system", "voice":"female", "speakReplies":false, "autoUpdate":true, "workspace":home, "guardianThreshold":0.5, "contextBudget":6000, "toolOutputLimit":1200, "maxSteps":8, "temperature":0.3, "smallQuant":"Q4_K_M", "omniQuant":"Q4_K_M", "smallURL":"http://127.0.0.1:8180/v1", "omniURL":"http://127.0.0.1:8181/v1", "guardianURL":"http://127.0.0.1:8766", "browserURL":"http://127.0.0.1:8767"})
 }
 fn choices() -> Value {
-    json!({"personality":["friendly","concise","playful","professional"], "approvalMode":["askAlways","approveForMe","fullAuto"], "theme":["system","light","dark"], "voice":["female","male"], "smallQuant":["QAD-Q4_0","Q4_K_M","Q5_K_M","Q6_K","Q8_0","F16"], "omniQuant":["Q4_0","Q4_K_M","Q8_0","F16"]})
+    let codes: Vec<&str> = liquid_core::i18n::CODES.to_vec();
+    let mut languages = vec!["auto"];
+    languages.extend(codes.iter().copied());
+    json!({"language":languages, "uiLanguage":codes, "personality":["friendly","concise","playful","professional"], "approvalMode":["askAlways","approveForMe","fullAuto"], "theme":["system","light","dark"], "voice":["female","male"], "smallQuant":["QAD-Q4_0","Q4_K_M","Q5_K_M","Q6_K","Q8_0","F16"], "omniQuant":["Q4_0","Q4_K_M","Q8_0","F16"]})
 }
 fn response(status: StatusCode, content_type: &'static str, data: impl Into<Body>) -> Response {
     Response::builder()
@@ -192,6 +196,9 @@ async fn route(State(app): State<App>, request: Request) -> Response {
                     json!({"error":e.to_string()}),
                 ),
             };
+        }
+        if request.method() == Method::POST && path == "/api/ideas/refresh" {
+            return ideas::refresh(&app).await;
         }
         if request.method() == Method::POST && path == "/api/update/check" {
             return json_response(StatusCode::OK, updater::check(&app).await);
@@ -604,7 +611,12 @@ async fn open_app(port: u16) {
     };
     let cancel = tokio_util::sync::CancellationToken::new();
     if platform::open_path(&target, &cancel).await.is_err() {
-        println!("Open {target} in your browser.");
+        println!(
+            "{}",
+            liquid_core::i18n::console_language()
+                .open_in_browser
+                .replace("{url}", &target)
+        );
     }
 }
 
@@ -661,17 +673,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(listener) => listener,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             if already_running(port).await {
-                println!("Liquid Agent is already running at http://127.0.0.1:{port}");
+                println!(
+                    "{}",
+                    liquid_core::i18n::console_language()
+                        .already_running
+                        .replace("{url}", &format!("http://127.0.0.1:{port}"))
+                );
                 if open {
                     open_app(port).await;
                 }
                 std::process::exit(0);
             }
-            eprintln!("Port {port} is in use by another program. Set LIQUID_AGENT_PORT to use a different port.");
+            eprintln!(
+                "{}",
+                liquid_core::i18n::console_language()
+                    .port_in_use
+                    .replace("{port}", &port.to_string())
+            );
             std::process::exit(1);
         }
         Err(e) => return Err(e.into()),
     };
+    let starters = store::load_routines(&data, liquid_core::i18n::reply_for(&settings).strings)?;
     let app = App {
         port,
         token,
@@ -679,7 +702,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         data: data.clone(),
         settings: Arc::new(Mutex::new(settings)),
         memory: Arc::new(Mutex::new(store::load_memory(&data)?)),
-        routines: Arc::new(Mutex::new(store::load_routines(&data)?)),
+        routines: Arc::new(Mutex::new(starters)),
         reminders: Arc::new(Mutex::new(
             store::load_or(&data, "reminders.json", json!([]))
                 .as_array()
@@ -703,8 +726,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if wanted || outdated {
         let _ = installer::enqueue(&app, &[json!("guardian")]);
     }
-    println!("Liquid Agent is running at http://127.0.0.1:{port}");
-    println!("Data: {}", data.display());
+    println!(
+        "{}",
+        liquid_core::i18n::console_language()
+            .running
+            .replace("{url}", &format!("http://127.0.0.1:{port}"))
+    );
+    println!(
+        "{}",
+        liquid_core::i18n::console_language()
+            .data_folder
+            .replace("{path}", &data.display().to_string())
+    );
     if open {
         open_app(port).await;
     }

@@ -22,23 +22,24 @@ import { api, fileURL, transcribe, upload } from "../api";
 import { Mic as Microphone, wav } from "../audio/capture";
 import { errorToast, go, part, toast, useStore } from "../store";
 import type { ApprovalMode, Attachment, Chat, Part } from "../types";
-import { DEVICE, captureScreen, cx, prepareImage } from "../util";
+import { captureScreen, clock, cx, IS_MAC, prepareImage } from "../util";
 import { Menu, Spinner } from "./ui";
+import { t } from "../i18n";
 
 type Pending = { key: string; name: string; kind: Attachment["kind"]; preview?: string; uploaded?: Attachment; failed?: boolean };
 
-export const MODES: { value: ApprovalMode; label: string; detail: string; icon: JSX.Element }[] = [
-  { value: "askAlways", label: "Ask for Approval", detail: "Asks you before every action.", icon: <ShieldQuestion size={15} /> },
-  { value: "approveForMe", label: "Approve for Me", detail: "Auto 150M approves safe actions and asks about the rest.", icon: <ShieldCheck size={15} /> },
-  { value: "fullAuto", label: "Full Auto", detail: "Runs everything. Risky commands still ask.", icon: <Zap size={15} /> },
+export const modes = (): { value: ApprovalMode; label: string; detail: string; icon: JSX.Element }[] => [
+  { value: "askAlways", label: t("mode.ask"), detail: t("mode.askDetail"), icon: <ShieldQuestion size={15} /> },
+  { value: "approveForMe", label: t("mode.approve"), detail: t("mode.approveDetail"), icon: <ShieldCheck size={15} /> },
+  { value: "fullAuto", label: t("mode.full"), detail: t("mode.fullDetail"), icon: <Zap size={15} /> },
 ];
 
 /** Approve for Me needs Auto 150M. Says what picking it will do when Auto 150M isn't ready yet. */
 export function modeNote(guardian: Part | undefined, wanted: boolean) {
   if (guardian?.status === "running") return null;
-  if (wanted) return guardian?.status === "failed" ? "Auto 150M didn't finish. Pick this again to retry." : "Getting Auto 150M ready. It switches on by itself.";
-  if (guardian?.status === "installed" || guardian?.status === "starting") return "Starts Auto 150M first.";
-  return `Downloads Auto 150M first (${guardian?.size ?? "about 1.1 GB"}).`;
+  if (wanted) return guardian?.status === "failed" ? t("composer.guardianFailed") : t("composer.guardianGetting");
+  if (guardian?.status === "installed" || guardian?.status === "starting") return t("composer.guardianStarts");
+  return t("composer.guardianDownloads", { size: guardian?.size ?? t("composer.aboutGigabytes", { n: "1.1" }) });
 }
 
 const kindOf = (file: File): Attachment["kind"] =>
@@ -127,7 +128,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
       const raw = list[i];
       const file = raw instanceof File ? raw : new File([raw], names?.[i] ?? "file", { type: raw.type });
       if (file.size > 25 * 1024 * 1024) {
-        toast(`${file.name} is too big (25 MB at most).`, "error");
+        toast(t("composer.tooBig", { name: file.name }), "error");
         continue;
       }
       const key = crypto.randomUUID();
@@ -200,11 +201,11 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }
 
   async function lookAtScreen() {
-    if (!omniUp) return toast("Seeing your screen needs Eyes and ears. Set it up in Settings → Downloads.", "error");
+    if (!omniUp) return toast(t("composer.needsEyes"), "error");
     try {
       const shot = await captureScreen();
-      await addFiles([shot], [`Screen ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.png`]);
-      if (!text.trim()) setText("What's on my screen?");
+      await addFiles([shot], [t("composer.screenFile", { time: clock(Date.now()) })]);
+      if (!text.trim()) setText(t("composer.screenPrompt"));
       area.current?.focus();
     } catch (e) {
       if ((e as Error).name !== "NotAllowedError") errorToast(e);
@@ -212,7 +213,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }
 
   async function startDictation() {
-    if (!omniUp) return toast("Dictation needs Eyes and ears. Set it up in Settings → Downloads.", "error");
+    if (!omniUp) return toast(t("composer.dictationNeedsEyes"), "error");
     const chunks: Int16Array[] = [];
     const m = new Microphone(16000, (f) => {
       chunks.push(f.pcm);
@@ -221,7 +222,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
     try {
       await m.start();
     } catch {
-      return toast("I can't use the microphone. Allow it in your browser's site settings.", "error");
+      return toast(t("composer.micBlocked"), "error");
     }
     mic.current = { mic: m, chunks, started: Date.now() };
     setElapsed(0);
@@ -246,7 +247,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
     try {
       const said = await transcribe(wav(current.chunks, 16000));
       if (said) setText((t) => (t.trim() ? `${t.trimEnd()} ${said}` : said));
-      else toast("I didn't catch that. Try again a little closer to the mic.");
+      else toast(t("composer.didntCatch"));
     } catch (e) {
       errorToast(e);
     } finally {
@@ -255,14 +256,15 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
     }
   }
 
-  const mode = MODES.find((m) => m.value === settings?.approvalMode) ?? MODES[0];
+  const mode = modes().find((m) => m.value === settings?.approvalMode) ?? modes()[0];
+  const device = IS_MAC ? t("device.mac") : t("device.computer");
 
   return (
     <div className="composer-wrap">
       {dragging && (
         <div className="drop-overlay">
           <Paperclip size={28} />
-          <div>Drop files to add them</div>
+          <div>{t("composer.drop")}</div>
         </div>
       )}
       <div className={cx("composer", recording && "recording")}>
@@ -283,7 +285,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                     <Spinner size={14} />
                   </span>
                 )}
-                <button className="attachment-remove" onClick={() => setFiles((all) => all.filter((x) => x.key !== f.key))} aria-label={`Remove ${f.name}`}>
+                <button className="attachment-remove" onClick={() => setFiles((all) => all.filter((x) => x.key !== f.key))} aria-label={t("composer.remove", { name: f.name })}>
                   <X size={12} />
                 </button>
               </div>
@@ -294,7 +296,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
         {recording ? (
           <div className="dictation">
             <span className="rec-dot" />
-            <span className="rec-time">{recording === "busy" ? "Writing it down…" : `${Math.floor(elapsed / 60000)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, "0")}`}</span>
+            <span className="rec-time">{recording === "busy" ? t("composer.writingDown") : `${Math.floor(elapsed / 60000)}:${String(Math.floor(elapsed / 1000) % 60).padStart(2, "0")}`}</span>
             <div className="rec-level">
               {Array.from({ length: 28 }, (_, i) => (
                 <span key={i} style={{ height: `${Math.max(3, Math.min(22, level * 400 * (0.5 + Math.abs(Math.sin(i * 1.7 + elapsed / 180)))))}px` }} />
@@ -304,10 +306,10 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
               <Spinner />
             ) : (
               <>
-                <button className="round-btn ghost" onClick={() => stopDictation(false)} aria-label="Cancel dictation">
+                <button className="round-btn ghost" onClick={() => stopDictation(false)} aria-label={t("composer.cancelDictation")}>
                   <X size={16} />
                 </button>
-                <button className="round-btn primary" onClick={() => stopDictation(true)} aria-label="Finish dictation">
+                <button className="round-btn primary" onClick={() => stopDictation(true)} aria-label={t("composer.finishDictation")}>
                   <Check size={16} />
                 </button>
               </>
@@ -318,7 +320,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
             ref={area}
             value={text}
             rows={1}
-            placeholder={chat?.messages.length ? "Reply to Liquid Agent…" : `Ask anything, or tell me what to do on your ${DEVICE}`}
+            placeholder={chat?.messages.length ? t("composer.reply") : t("composer.ask", { device })}
             onChange={(e) => {
               setText(e.target.value);
               if (!e.target.value) keepDraft("");
@@ -344,13 +346,13 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
             <Menu
               side="top"
               trigger={(open, toggle) => (
-                <button className={cx("round-btn ghost", open && "active")} onClick={toggle} aria-label="Add">
+                <button className={cx("round-btn ghost", open && "active")} onClick={toggle} aria-label={t("composer.add")}>
                   <Plus size={18} />
                 </button>
               )}
               items={[
-                { label: "Add photos and files", icon: <Paperclip size={15} />, onClick: () => picker.current?.click() },
-                { label: "Look at my screen", icon: <Monitor size={15} />, onClick: lookAtScreen },
+                { label: t("composer.addFiles"), icon: <Paperclip size={15} />, onClick: () => picker.current?.click() },
+                { label: t("composer.lookAtScreen"), icon: <Monitor size={15} />, onClick: lookAtScreen },
               ]}
             />
             <input
@@ -370,38 +372,38 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                 <button
                   className={cx("mode-btn", open && "active")}
                   onClick={toggle}
-                  aria-label={`Permissions: ${mode.label}`}
-                  title={guardianWanted ? "Approve for Me turns on once Auto 150M is ready" : "Permissions"}
+                  aria-label={t("composer.permissions", { mode: mode.label })}
+                  title={guardianWanted ? t("composer.approveWhenReady") : t("composer.permissionsTitle")}
                 >
                   {guardianWanted && guardian?.status !== "failed" ? <Spinner size={14} /> : mode.icon}
                   <span>{mode.label}</span>
                 </button>
               )}
-              items={MODES.map((m) => ({
+              items={modes().map((m) => ({
                 label: m.label,
                 icon: m.icon,
                 detail:
                   (m.value === "approveForMe" && modeNote(guardian, guardianWanted)) ||
-                  (m.value === "fullAuto" && customBrain && "Your own model is answering, so Auto 150M still checks each action.") ||
+                  (m.value === "fullAuto" && customBrain && t("composer.customBrainNote")) ||
                   m.detail,
                 checked: m.value === mode.value,
                 onClick: () => api("PATCH", "/api/settings", { approvalMode: m.value }).catch(errorToast),
               }))}
             />
             <div className="composer-spacer" />
-            <button className="round-btn ghost" onClick={startDictation} aria-label="Dictate" title="Dictate">
+            <button className="round-btn ghost" onClick={startDictation} aria-label={t("composer.dictate")} title={t("composer.dictate")}>
               <Mic size={17} />
             </button>
             {busy ? (
-              <button className="round-btn primary" onClick={() => api("POST", `/api/chats/${chat!.id}/stop`).catch(errorToast)} aria-label="Stop" title="Stop">
+              <button className="round-btn primary" onClick={() => api("POST", `/api/chats/${chat!.id}/stop`).catch(errorToast)} aria-label={t("common.stop")} title={t("common.stop")}>
                 <Square size={13} fill="currentColor" />
               </button>
             ) : text.trim() || files.length ? (
-              <button className="round-btn primary" onClick={send} disabled={!canSend} aria-label="Send" title="Send">
+              <button className="round-btn primary" onClick={send} disabled={!canSend} aria-label={t("common.send")} title={t("common.send")}>
                 {uploading ? <Spinner size={14} /> : <ArrowUp size={18} />}
               </button>
             ) : (
-              <button className="round-btn primary voice" onClick={() => go(chat ? `#/voice/${chat.id}` : "#/voice")} aria-label="Voice chat" title="Voice chat">
+              <button className="round-btn primary voice" onClick={() => go(chat ? `#/voice/${chat.id}` : "#/voice")} aria-label={t("sidebar.voiceChat")} title={t("sidebar.voiceChat")}>
                 <AudioLines size={18} />
               </button>
             )}

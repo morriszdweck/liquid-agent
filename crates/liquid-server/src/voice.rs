@@ -74,20 +74,22 @@ fn schema(browser: bool) -> Vec<Value> {
     }).collect()
 }
 fn instructions(app: &App, chat: &str, settings: &Value) -> String {
-    let style = match settings["personality"].as_str().unwrap_or("") {
-        "concise" => "Be concise.",
-        "playful" => "Be playful and helpful.",
-        "professional" => "Be precise and professional.",
-        _ => "Be warm and clear.",
+    // The voice model answers in the language of the chat, in the words of that language.
+    let reply = liquid_core::i18n::reply_for(settings);
+    let strings = reply.strings;
+    let personality = reply.personality(settings["personality"].as_str().unwrap_or(""));
+    let style = if personality.is_empty() {
+        String::new()
+    } else {
+        format!("{personality} ")
     };
     let name = settings["userName"]
         .as_str()
         .filter(|s| !s.is_empty())
         .map(|s| {
-            format!(
-                " The user's name is {}.",
-                s.chars().take(100).collect::<String>()
-            )
+            strings
+                .user_name
+                .replace("{name}", &s.chars().take(100).collect::<String>())
         })
         .unwrap_or_default();
     let recent = app
@@ -107,7 +109,11 @@ fn instructions(app: &App, chat: &str, settings: &Value) -> String {
                     m["content"].as_str().filter(|s| !s.is_empty()).map(|text| {
                         format!(
                             "{}: {}",
-                            if m["role"] == "user" { "User" } else { "You" },
+                            if m["role"] == "user" {
+                                strings.speaker_user
+                            } else {
+                                strings.speaker_you
+                            },
                             text.chars().take(200).collect::<String>()
                         )
                     })
@@ -117,7 +123,16 @@ fn instructions(app: &App, chat: &str, settings: &Value) -> String {
         })
         .unwrap_or_default();
     let facts = liquid_core::memory::search(&app.memory.lock().unwrap(), &recent, 4).join("; ");
-    format!("You are Liquid Agent, a private local voice assistant. {style}{name} Answer in one or two short natural spoken sentences. Use tools for actions and current information. Camera notes describe the user's surroundings.\nUser facts: {facts}\nEarlier in this chat:\n{recent}")
+    let voice = strings
+        .voice
+        .replace("{style}", &style)
+        .replace("{name}", &name);
+    let facts_line = strings.user_facts.replace("{facts}", &facts);
+    format!(
+        "{voice} {}\n{facts_line}\n{}\n{recent}",
+        reply.directive(),
+        strings.voice_earlier
+    )
 }
 fn wav(pcm: &[u8], rate: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(44 + pcm.len());

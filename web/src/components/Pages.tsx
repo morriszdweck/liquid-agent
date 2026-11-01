@@ -27,8 +27,9 @@ import {
 import { api } from "../api";
 import { errorToast, go, part, toast, useStore } from "../store";
 import type { Chat, Routine } from "../types";
-import { DEVICE, clock, cx, timeAgo } from "../util";
-import { STARTERS } from "./ChatView";
+import { clock, cx, deviceName, timeAgo } from "../util";
+import { currentLocale, formatDate, t, type Key } from "../i18n";
+import { starters } from "./ChatView";
 import { Page } from "./Shell";
 import { ToolIcon } from "./Steps";
 import { Empty, Modal, Spinner, Toggle } from "./ui";
@@ -55,16 +56,16 @@ export function ForYou() {
 
   return (
     <Page
-      title="For You"
+      title={t("sidebar.forYou")}
       right={
         <button className="btn" onClick={refresh} disabled={refreshing || !canRefresh}>
-          {refreshing ? <Spinner size={13} /> : <RefreshCw size={14} />} New ideas
+          {refreshing ? <Spinner size={13} /> : <RefreshCw size={14} />} {t("pages.newIdeas")}
         </button>
       }
     >
-      <p className="page-lead">Ideas picked from what Liquid Agent knows about you. Everything stays on this {DEVICE}.</p>
+      <p className="page-lead">{t("pages.forYouLead", { device: deviceName() })}</p>
       <div className="idea-grid big">
-        {(ideas.items.length ? ideas.items : STARTERS).map((idea) => (
+        {(ideas.items.length ? ideas.items : starters()).map((idea) => (
           <button key={idea.title} className="idea-card" onClick={() => startChat(idea.prompt)}>
             <Sparkles size={16} className="idea-icon" />
             <span className="idea-title">{idea.title}</span>
@@ -73,16 +74,14 @@ export function ForYou() {
         ))}
       </div>
       <div className="muted small">
-        {ideas.items.length
-          ? `Updated ${timeAgo(ideas.at)}`
-          : "Starter ideas. Tell me a little about yourself and these will fit you better."}
+        {ideas.items.length ? t("pages.updated", { time: timeAgo(ideas.at) }) : t("pages.starterNote")}
       </div>
 
       <section className="section">
         <div className="section-head">
-          <h2>What I know about you</h2>
+          <h2>{t("pages.knowAboutYou")}</h2>
           <button className="link" onClick={() => go("#/memory")}>
-            Manage
+            {t("pages.manage")}
           </button>
         </div>
         {memory.length ? (
@@ -94,7 +93,7 @@ export function ForYou() {
             ))}
           </div>
         ) : (
-          <div className="muted">Nothing yet. Say “remember that I…” in any chat.</div>
+          <div className="muted">{t("pages.nothingYet")}</div>
         )}
       </section>
 
@@ -108,15 +107,15 @@ function Reminders() {
   return (
     <section className="section">
       <div className="section-head">
-        <h2>Reminders</h2>
+        <h2>{t("pages.reminders")}</h2>
       </div>
       <div className="list">
         {reminders.map((r) => (
           <div key={r.id} className="list-row">
             <Bell size={15} className="muted" />
             <span className="list-main">{r.text}</span>
-            <span className="muted small">{new Date(r.at).toDateString() === new Date().toDateString() ? clock(r.at) : new Date(r.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}</span>
-            <button className="icon-btn" aria-label="Cancel reminder" title="Cancel reminder" onClick={() => api("DELETE", `/api/reminders/${r.id}`).catch(errorToast)}>
+            <span className="muted small">{new Date(r.at).toDateString() === new Date().toDateString() ? clock(r.at) : formatDate(r.at, { weekday: "short", hour: "numeric", minute: "2-digit" })}</span>
+            <button className="icon-btn" aria-label={t("pages.cancelReminder")} title={t("pages.cancelReminder")} onClick={() => api("DELETE", `/api/reminders/${r.id}`).catch(errorToast)}>
               <X size={14} />
             </button>
           </div>
@@ -130,16 +129,21 @@ function Reminders() {
 
 const ROUTINE_ICONS: Record<string, typeof Sun> = { sun: Sun, folder: Folder, newspaper: Newspaper, gauge: Gauge, sparkles: Sparkles, mail: Mail, calendar: Calendar, coffee: Coffee, heart: Heart, bell: Bell };
 const COLORS = ["#339cff", "#f5a524", "#a855f7", "#22c55e", "#ef4444", "#ec4899", "#14b8a6", "#64748b"];
-const DAYS = ["S", "M", "T", "W", "T", "F", "S"];
+/** The day letters for a schedule, in the current language. Day 0 is Sunday. */
+const dayName = (day: number, style: "narrow" | "short") =>
+  new Intl.DateTimeFormat(currentLocale(), { weekday: style }).format(new Date(2024, 0, 7 + day));
+const DAYS = () => [0, 1, 2, 3, 4, 5, 6].map((d) => dayName(d, "narrow"));
 
+/** "Run by hand", or "Weekdays at 9:00 AM" in the current language. */
 function scheduleText(r: Routine) {
   const s = r.schedule;
-  if (!s.enabled) return "Run by hand";
+  if (!s.enabled) return t("routine.byHand");
   const [h, m] = s.time.split(":").map(Number);
-  const time = new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const days = s.days.length === 7 ? "Every day" : s.days.join() === "1,2,3,4,5" ? "Weekdays" : s.days.join() === "0,6" ? "Weekends" : s.days.map((d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d]).join(", ");
-  return `${days} at ${time}`;
+  const time = new Date(2000, 0, 1, h, m).toLocaleTimeString(currentLocale(), { hour: "numeric", minute: "2-digit" });
+  const days = s.days.length === 7 ? t("routine.everyDay") : s.days.join() === "1,2,3,4,5" ? t("routine.weekdays") : s.days.join() === "0,6" ? t("routine.weekends") : s.days.map((d) => dayName(d, "short")).join(", ");
+  return t("routine.at", { days, time });
 }
+
 
 export function Routines() {
   const routines = useStore((s) => s.routines);
@@ -161,14 +165,14 @@ export function Routines() {
 
   return (
     <Page
-      title="Routines"
+      title={t("sidebar.routines")}
       right={
         <button className="btn primary" onClick={() => setEditing("new")}>
-          <Plus size={15} /> New routine
+          <Plus size={15} /> {t("routine.new")}
         </button>
       }
     >
-      <p className="page-lead">Tasks you can run with one click, or on a schedule while this page's server is running.</p>
+      <p className="page-lead">{t("routine.lead")}</p>
       <div className="routine-grid">
         {routines.map((r) => {
           const Icon = ROUTINE_ICONS[r.icon] ?? Sparkles;
@@ -179,7 +183,7 @@ export function Routines() {
                   <Icon size={18} />
                 </span>
                 <Toggle
-                  label="Run on schedule"
+                  label={t("routine.runOnSchedule")}
                   checked={r.schedule.enabled}
                   onChange={(enabled) => api("PATCH", `/api/routines/${r.id}`, { schedule: { ...r.schedule, enabled } }).catch(errorToast)}
                 />
@@ -191,17 +195,17 @@ export function Routines() {
                   <Repeat size={11} /> {scheduleText(r)}
                 </span>
                 <div className="routine-actions">
-                  <button className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setEditing(r)}>
+                  <button className="icon-btn" title={t("common.edit")} aria-label={t("common.edit")} onClick={() => setEditing(r)}>
                     <Pencil size={14} />
                   </button>
                   <button className="btn small primary" onClick={() => run(r)} disabled={starting === r.id}>
-                    {starting === r.id ? <Spinner size={12} /> : <Play size={12} fill="currentColor" />} Run
+                    {starting === r.id ? <Spinner size={12} /> : <Play size={12} fill="currentColor" />} {t("routine.run")}
                   </button>
                 </div>
               </div>
               {r.lastRun > 0 && (
                 <button className="routine-last link" onClick={() => r.lastChatId && go(`#/chat/${r.lastChatId}`)}>
-                  Last run {timeAgo(r.lastRun)}
+                  {t("routine.lastRun", { time: timeAgo(r.lastRun) })}
                 </button>
               )}
             </div>
@@ -209,7 +213,7 @@ export function Routines() {
         })}
         <button className="routine-card add" onClick={() => setEditing("new")}>
           <Plus size={20} />
-          <span>New routine</span>
+          <span>{t("routine.new")}</span>
         </button>
       </div>
       {reminders.length > 0 && <Reminders />}
@@ -227,7 +231,7 @@ function RoutineEditor({ routine, onClose }: { routine?: Routine; onClose: () =>
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
-    if (!name.trim() || !prompt.trim()) return toast("Give the routine a name and say what it should do.", "error");
+    if (!name.trim() || !prompt.trim()) return toast(t("routine.needNameAndPrompt"), "error");
     setSaving(true);
     try {
       const body = { name, prompt, icon, color, schedule };
@@ -241,45 +245,45 @@ function RoutineEditor({ routine, onClose }: { routine?: Routine; onClose: () =>
   };
 
   const remove = async () => {
-    if (!routine || !confirm(`Delete “${routine.name}”?`)) return;
+    if (!routine || !confirm(t("routine.deleteConfirm", { name: routine.name }))) return;
     await api("DELETE", `/api/routines/${routine.id}`).catch(errorToast);
     onClose();
   };
 
   return (
     <Modal
-      title={routine ? "Edit routine" : "New routine"}
+      title={routine ? t("routine.edit") : t("routine.new")}
       onClose={onClose}
       footer={
         <>
           {routine && (
             <button className="btn danger-text" onClick={remove}>
-              <Trash2 size={14} /> Delete
+              <Trash2 size={14} /> {t("common.delete")}
             </button>
           )}
           <div className="grow" />
           <button className="btn" onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <button className="btn primary" onClick={save} disabled={saving}>
-            {saving && <Spinner size={13} />} Save
+            {saving && <Spinner size={13} />} {t("common.save")}
           </button>
         </>
       }
     >
       <label className="field">
-        <span>Name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Evening wind-down" autoFocus />
+        <span>{t("routine.name")}</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("routine.namePlaceholder")} autoFocus />
       </label>
       <label className="field">
-        <span>What should it do?</span>
-        <textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Tell me what's on my calendar tomorrow and suggest a good bedtime." />
+        <span>{t("routine.prompt")}</span>
+        <textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder={t("routine.promptPlaceholder")} />
       </label>
       <div className="field">
-        <span>Look</span>
+        <span>{t("routine.look")}</span>
         <div className="picker-row">
           {Object.entries(ROUTINE_ICONS).map(([key, Icon]) => (
-            <button key={key} className={cx("swatch", icon === key && "selected")} onClick={() => setIcon(key)} aria-label={key} style={icon === key ? { background: color, color: "#fff" } : undefined}>
+            <button key={key} className={cx("swatch", icon === key && "selected")} onClick={() => setIcon(key)} aria-label={t(`routine.icon.${key}` as Key)} style={icon === key ? { background: color, color: "#fff" } : undefined}>
               <Icon size={15} />
             </button>
           ))}
@@ -292,14 +296,14 @@ function RoutineEditor({ routine, onClose }: { routine?: Routine; onClose: () =>
       </div>
       <div className="field">
         <div className="field-row">
-          <span>Run on a schedule</span>
+          <span>{t("routine.schedule")}</span>
           <Toggle checked={schedule.enabled} onChange={(enabled) => setSchedule({ ...schedule, enabled })} />
         </div>
         {schedule.enabled && (
           <div className="schedule">
             <input type="time" value={schedule.time} onChange={(e) => setSchedule({ ...schedule, time: e.target.value })} />
             <div className="days">
-              {DAYS.map((d, i) => (
+              {DAYS().map((d, i) => (
                 <button
                   key={i}
                   className={cx("day", schedule.days.includes(i) && "selected")}
@@ -336,20 +340,20 @@ export function Memory() {
 
   return (
     <Page
-      title="Memory"
+      title={t("sidebar.memory")}
       right={
         memory.length > 0 && (
-          <button className="btn danger-text" onClick={() => confirm("Forget everything Liquid Agent knows about you?") && api("DELETE", "/api/memory").catch(errorToast)}>
-            <Trash2 size={14} /> Forget all
+          <button className="btn danger-text" onClick={() => confirm(t("memory.forgetConfirm")) && api("DELETE", "/api/memory").catch(errorToast)}>
+            <Trash2 size={14} /> {t("memory.forgetAll")}
           </button>
         )
       }
     >
-      <p className="page-lead">Things Liquid Agent remembers about you. It learns from your chats and uses only what's relevant, so replies stay quick.</p>
+      <p className="page-lead">{t("memory.lead")}</p>
       <div className="add-row">
-        <input value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Add something, like “I live in Lisbon” or “I prefer short answers”" />
+        <input value={adding} onChange={(e) => setAdding(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder={t("memory.addPlaceholder")} />
         <button className="btn primary" onClick={add} disabled={!adding.trim()}>
-          <Plus size={15} /> Add
+          <Plus size={15} /> {t("common.add")}
         </button>
       </div>
       {memory.length ? (
@@ -375,8 +379,8 @@ export function Memory() {
               <div className="list-actions">
                 <button
                   className="icon-btn"
-                  title="Edit"
-                  aria-label="Edit"
+                  title={t("common.edit")}
+                  aria-label={t("common.edit")}
                   onClick={() => {
                     setValue(fact);
                     setEditing(i);
@@ -384,7 +388,7 @@ export function Memory() {
                 >
                   {editing === i ? <Check size={14} /> : <Pencil size={14} />}
                 </button>
-                <button className="icon-btn" title="Forget" aria-label="Forget" onClick={() => api("DELETE", `/api/memory/${i}`).catch(errorToast)}>
+                <button className="icon-btn" title={t("memory.forget")} aria-label={t("memory.forget")} onClick={() => api("DELETE", `/api/memory/${i}`).catch(errorToast)}>
                   <Trash2 size={14} />
                 </button>
               </div>
@@ -392,8 +396,8 @@ export function Memory() {
           ))}
         </div>
       ) : (
-        <Empty icon={<Brain size={22} />} title="Nothing remembered yet">
-          Tell it things in any chat (“remember that my sister is called Ana”) or add them above.
+        <Empty icon={<Brain size={22} />} title={t("memory.emptyTitle")}>
+          {t("memory.emptyBody")}
         </Empty>
       )}
     </Page>
@@ -406,28 +410,28 @@ export function Activity() {
   const activity = useStore((s) => s.activity);
   const [filter, setFilter] = useState<"all" | "auto" | "you" | "blocked">("all");
   const list = activity.filter((a) =>
-    filter === "all" ? true : filter === "auto" ? a.decision?.startsWith("Auto ") : filter === "you" ? a.decision?.startsWith("You") : a.ok === false,
+    filter === "all" ? true : filter === "auto" ? a.decisionBy === "guardian" : filter === "you" ? a.decisionBy === "you" : a.ok === false,
   );
 
   return (
     <Page
-      title="Activity"
+      title={t("sidebar.activity")}
       right={
         activity.length > 0 && (
-          <button className="btn" onClick={() => confirm("Clear the activity log?") && api("DELETE", "/api/activity").catch(errorToast)}>
-            <Trash2 size={14} /> Clear
+          <button className="btn" onClick={() => confirm(t("activity.clearConfirm")) && api("DELETE", "/api/activity").catch(errorToast)}>
+            <Trash2 size={14} /> {t("activity.clear")}
           </button>
         )
       }
     >
-      <p className="page-lead">Every action Liquid Agent took on your {DEVICE}, and who approved it.</p>
+      <p className="page-lead">{t("activity.lead", { device: deviceName() })}</p>
       <div className="filters">
         {(
           [
-            ["all", "Everything"],
-            ["auto", "Approved by Auto 150M"],
-            ["you", "Approved by you"],
-            ["blocked", "Failed or denied"],
+            ["all", t("activity.filter.all")],
+            ["auto", t("activity.filter.auto")],
+            ["you", t("activity.filter.you")],
+            ["blocked", t("activity.filter.blocked")],
           ] as const
         ).map(([value, label]) => (
           <button key={value} className={cx("chip", filter === value && "selected")} onClick={() => setFilter(value)}>
@@ -442,10 +446,10 @@ export function Activity() {
               <ToolIcon tool={a.tool} />
               <span className="list-main">{a.label}</span>
               {a.decision && (
-                <span className={cx("pill", a.ok === false ? "pill-bad" : a.decision.startsWith("Auto ") ? "pill-accent" : "pill-muted")}>
-                  {a.decision.startsWith("Auto ") && <ShieldCheck size={11} />}
+                <span className={cx("pill", a.ok === false ? "pill-bad" : a.decisionBy === "guardian" ? "pill-accent" : "pill-muted")}>
+                  {a.decisionBy === "guardian" && <ShieldCheck size={11} />}
                   {a.decision}
-                  {a.pDeny !== undefined && ` · ${Math.round((1 - a.pDeny) * 100)}% safe`}
+                  {a.pDeny !== undefined && ` · ${t("activity.safe", { n: Math.round((1 - a.pDeny) * 100) })}`}
                 </span>
               )}
               <span className="muted small nowrap">{timeAgo(a.at)}</span>
@@ -453,8 +457,8 @@ export function Activity() {
           ))}
         </div>
       ) : (
-        <Empty icon={<History size={22} />} title={activity.length ? "Nothing matches" : "No activity yet"}>
-          {activity.length ? "Try another filter." : `When Liquid Agent uses your ${DEVICE}, files or the web, it shows up here.`}
+        <Empty icon={<History size={22} />} title={activity.length ? t("activity.noMatch") : t("activity.empty")}>
+          {activity.length ? t("activity.tryFilter") : t("activity.emptyBody", { device: deviceName() })}
         </Empty>
       )}
     </Page>

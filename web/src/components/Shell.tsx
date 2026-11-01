@@ -5,6 +5,7 @@ import { ChevronDown, Menu as MenuIcon, SquarePen, WifiOff } from "lucide-react"
 import { go, useStore } from "../store";
 import { cx } from "../util";
 import { IconButton, Menu, type MenuItem } from "./ui";
+import { t } from "../i18n";
 
 export function TopBar({
   title,
@@ -33,7 +34,7 @@ export function TopBar({
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <IconButton label="Open sidebar" className="mobile-only" onClick={() => useStore.setState({ sidebarOpen: true })}>
+        <IconButton label={t("shell.openSidebar")} className="mobile-only" onClick={() => useStore.setState({ sidebarOpen: true })}>
           <MenuIcon size={18} />
         </IconButton>
         {editing ? (
@@ -57,7 +58,7 @@ export function TopBar({
               </button>
             )}
             items={[
-              ...(onRename ? [{ label: "Rename", onClick: () => setEditing(true) } as MenuItem] : []),
+              ...(onRename ? [{ label: t("shell.rename"), onClick: () => setEditing(true) } as MenuItem] : []),
               ...menu,
             ]}
           />
@@ -69,11 +70,11 @@ export function TopBar({
       <div className="topbar-right">
         {loaded && !connected && (
           <span className="pill pill-bad">
-            <WifiOff size={12} /> Reconnecting…
+            <WifiOff size={12} /> {t("shell.reconnecting")}
           </span>
         )}
         {right}
-        <IconButton label="New chat" className="mobile-only" onClick={() => go("#/")}>
+        <IconButton label={t("shell.newChat")} className="mobile-only" onClick={() => go("#/")}>
           <SquarePen size={18} />
         </IconButton>
       </div>
