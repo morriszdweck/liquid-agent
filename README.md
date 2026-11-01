@@ -21,7 +21,7 @@ On a Mac, download the app and drag it to Applications:
 - [Liquid Agent for Apple silicon](https://github.com/morriszdweck/liquid-agent/releases/latest/download/Liquid-Agent-arm64.dmg)
 - [Liquid Agent for Intel](https://github.com/morriszdweck/liquid-agent/releases/latest/download/Liquid-Agent-x64.dmg)
 
-It isn't notarized yet, so the first time macOS blocks it: open System Settings → Privacy & Security and click **Open Anyway**. On first launch it installs Liquid Agent (the same copy the command below installs) and shows the setup screen.
+The app isn't notarized yet, so macOS blocks it the first time. Either install with the Terminal command below instead, or open System Settings → Privacy & Security, scroll down and click **Open Anyway**. On first launch it installs Liquid Agent (the same copy the command below installs) and shows the setup screen.
 
 Or paste this into Terminal on macOS, or a terminal on Linux:
 

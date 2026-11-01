@@ -1,7 +1,7 @@
 {
   "name": "liquid-agent-desktop",
   "productName": "Liquid Agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Liquid Agent for macOS: a window onto the Liquid Agent that runs on this computer.",
   "license": "MIT",

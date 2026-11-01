@@ -2353,22 +2353,11 @@ input[type="range"] {
 .desktop .topbar :is(button, a, input, select, [role="button"], .topbar-title) {
   -webkit-app-region: no-drag;
 }
-/* The name sits centered in the title bar, clear of the traffic lights, like a Mac window title. */
+/* The traffic lights take the place of the logo and name. */
 .desktop .sidebar-head {
-  position: relative;
   justify-content: flex-end;
 }
 .desktop .sidebar-head .brand {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0;
-  color: var(--fg-2, inherit);
-  pointer-events: none;
-}
-.desktop .sidebar-head .logo {
   display: none;
 }
 @media (max-width: 820px) {

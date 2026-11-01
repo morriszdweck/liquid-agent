@@ -17,6 +17,18 @@ const DATA = path.join(os.homedir(), "Library", "Application Support", "LiquidAg
 const INSTALLER = "https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh";
 
 let win = null;
+
+// The title bar look, applied by the app itself so it doesn't wait for the
+// agent to update: the top bars move the window, and the traffic lights take
+// the place of the logo and name.
+const TITLE_BAR_CSS = `
+  .sidebar-head, .topbar { -webkit-app-region: drag; }
+  .sidebar-head :is(button, a, input, select, [role="button"]),
+  .topbar :is(button, a, input, select, [role="button"], .topbar-title) { -webkit-app-region: no-drag; }
+  .sidebar-head { justify-content: flex-end; }
+  .sidebar-head .brand { display: none; }
+  @media (max-width: 820px) { .topbar { padding-left: 80px; } }
+`;
 let startedServer = false;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -100,6 +112,9 @@ function createWindow() {
     webPreferences: { contextIsolation: true, sandbox: true, spellcheck: true },
   });
   win.once("ready-to-show", () => win.show());
+  win.webContents.on("did-finish-load", () => {
+    if (isLocal(win.webContents.getURL())) win.webContents.insertCSS(TITLE_BAR_CSS).catch(() => {});
+  });
   win.on("closed", () => (win = null));
   // Links out of the app open in the default browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
