@@ -26,21 +26,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run test:web
       - run: npm run build
       - run: for f in scripts/*.mjs; do node --check "$f"; done
       - run: bash -n install.sh
       - run: npm test
-      - run: node scripts/rust-server-check.mjs
-      - run: node scripts/rust-autostart-check.mjs
-      - run: node scripts/rust-voice-check.mjs
-      - run: node scripts/rust-scheduler-check.mjs
-      - run: node scripts/rust-desktop-check.mjs
-      - run: node scripts/rust-media-tools-check.mjs
-      - run: node scripts/rust-installer-check.mjs
-      - run: node scripts/handover-check.mjs
+      - run: npm run test:server -- tests/server/rust-server.test.mjs
+      - run: npm run test:server -- tests/server/rust-autostart.test.mjs
+      - run: npm run test:server -- tests/server/rust-voice.test.mjs
+      - run: npm run test:server -- tests/server/rust-scheduler.test.mjs
+      - run: npm run test:server -- tests/server/rust-desktop.test.mjs
+      - run: npm run test:server -- tests/server/rust-media-tools.test.mjs
+      - run: npm run test:server -- tests/server/rust-installer.test.mjs
+      - run: npm run test:server -- tests/server/handover.test.mjs
       - run: node scripts/bundle.mjs --build 1 && tar -tzf release/liquid-agent.tar.gz liquid-agent/build.json liquid-agent/web/dist/index.html liquid-agent/bin/ | grep -c liquid-server- | grep -qx 1
       - if: runner.os == 'Linux'
-        run: node scripts/launcher-check.mjs
+        run: npm run test:server -- tests/server/launcher.test.mjs
 
   rust-binaries:
     name: Rust server and launcher (${{ matrix.name }})
@@ -181,7 +182,7 @@ jobs:
       - run: npm ci && npm run build
       - run: cargo build --locked -p liquid-guardian -p liquid-server
       - name: Download the engine and the smallest LFM3 1.7B, chat and run a tool
-        run: node scripts/smoke.mjs --models
+        run: LIQUID_TEST_MODELS=1 npm run test:server -- tests/server/smoke.test.mjs
         timeout-minutes: 40
 
   omni:
@@ -196,7 +197,7 @@ jobs:
       - run: npm ci && npm run build
       - run: cargo build --locked -p liquid-guardian -p liquid-server
       - name: Download the engine and the smallest Omni, then speak, transcribe and describe a picture
-        run: node scripts/smoke.mjs --omni
+        run: LIQUID_TEST_OMNI=1 npm run test:server -- tests/server/smoke.test.mjs
         timeout-minutes: 50
 
   helpers:
@@ -211,12 +212,12 @@ jobs:
       - run: npm ci && npm run build
       - run: cargo build --locked -p liquid-guardian -p liquid-server
       - name: Install Auto 150M and the Web helper's browser, and start them
-        run: node scripts/smoke.mjs --helpers
+        run: LIQUID_TEST_HELPERS=1 npm run test:server -- tests/server/smoke.test.mjs
         timeout-minutes: 40
       - name: Check the Web helper's browser through the server, with Chrome for Testing's headless shell
         run: |
           chrome="$(npx -y @puppeteer/browsers install chrome-headless-shell@stable | tail -1 | awk '{print $NF}')"
-          LIQUID_TEST_CHROME="$chrome" node scripts/rust-server-check.mjs
+          LIQUID_TEST_CHROME="$chrome" npm run test:server -- tests/server/rust-server.test.mjs
         timeout-minutes: 20
 
   mac-app:

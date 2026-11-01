@@ -319,7 +319,7 @@ pub async fn chats(app: &App, request: Request, path: &str) -> Response {
                     token.cancel();
                 }
             }
-            if let Err(error) = store::save(&app.data, "chats.json", &json!(next)) {
+            if let Err(error) = store::save_array(&app.data, "chats.json", &next) {
                 return failure(error);
             }
             *current = next;
@@ -344,7 +344,7 @@ pub async fn chats(app: &App, request: Request, path: &str) -> Response {
         }
         _ => return missing(),
     };
-    if let Err(error) = store::save(&app.data, "chats.json", &json!(next)) {
+    if let Err(error) = store::save_array(&app.data, "chats.json", &next) {
         return failure(error);
     }
     *current = next;

@@ -103,7 +103,9 @@ npm ci
 npm run dev        # rebuilds the UI and runs the Rust server
 npm run typecheck  # TypeScript for the web UI and the setup screen
 cargo test --workspace   # Rust unit tests
+npm run test:web  # client unit tests (Vitest), for the audio and text helpers
 npm test           # starts the server and checks its API (needs the debug build above)
+npm run test:server   # every backend test: the real server binaries with fake engines (tests/server)
 node scripts/bundle.mjs --build 1   # packs release/liquid-agent.tar.gz and latest.json, as CI does for releases
 npm run build:setup && scripts/mac-app.sh aarch64-apple-darwin arm64   # on a Mac: the Mac app and its DMG
 ```

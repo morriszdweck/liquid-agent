@@ -1,11 +1,14 @@
 // Plays streamed PCM16 audio without gaps, and can stop instantly when the user interrupts.
 
+import { alignPcm } from "./pcm";
+
 export class Player {
   private ctx = new AudioContext();
   private analyser = this.ctx.createAnalyser();
   private next = 0;
   private sources = new Set<AudioBufferSourceNode>();
   private levels = new Uint8Array(256);
+  private carry: Uint8Array | null = null;
 
   constructor(private rate: number) {
     this.analyser.fftSize = 512;
@@ -17,7 +20,8 @@ export class Player {
   }
 
   push(bytes: ArrayBuffer) {
-    const pcm = new Int16Array(bytes);
+    const { samples: pcm, carry } = alignPcm(new Uint8Array(bytes), this.carry);
+    this.carry = carry;
     if (!pcm.length) return;
     const buffer = this.ctx.createBuffer(1, pcm.length, this.rate);
     const data = buffer.getChannelData(0);
@@ -52,6 +56,8 @@ export class Player {
     }
     this.sources.clear();
     this.next = 0;
+    // A cut-off reply can leave half a sample behind; it must not join the next reply.
+    this.carry = null;
   }
 
   close() {

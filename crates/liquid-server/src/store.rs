@@ -4,9 +4,16 @@ use serde_json::{json, Value};
 use std::{fs, io, path::Path};
 
 pub fn save(dir: &Path, name: &str, value: &Value) -> io::Result<()> {
+    write(dir, name, &serde_json::to_vec(value)?)
+}
+/// Saves a list without first copying it into a JSON value, which would double the memory a big chat list takes.
+pub fn save_array(dir: &Path, name: &str, items: &[Value]) -> io::Result<()> {
+    write(dir, name, &serde_json::to_vec(items)?)
+}
+fn write(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{name}.tmp"));
-    fs::write(&tmp, serde_json::to_vec(value)?)?;
+    fs::write(&tmp, bytes)?;
     fs::rename(tmp, dir.join(name))
 }
 fn load(dir: &Path, name: &str) -> io::Result<Option<Value>> {

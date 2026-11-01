@@ -3,43 +3,12 @@
 
 import { speakAudio } from "../api";
 import { errorToast, useStore } from "../store";
+import { chunks, plain } from "./text";
+
+export { plain } from "./text";
 
 let controller: AbortController | null = null;
 let audio: HTMLAudioElement | null = null;
-
-/** Turns Markdown into something pleasant to hear. */
-export function plain(markdown: string) {
-  return markdown
-    .replace(/```[\s\S]*?```/g, " (code shown on screen) ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\s*\|?[-: |]+\|?\s*$/gm, "")
-    .replace(/\|/g, ", ")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/[*_~>#]/g, "")
-    .replace(/\$\$?([^$]+)\$\$?/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function chunks(text: string, max = 250) {
-  const sentences = text.match(/[^.!?。]+[.!?。]+["')\]]*\s*|[^.!?。]+$/g) ?? [text];
-  const out: string[] = [];
-  let current = "";
-  for (const s of sentences) {
-    if ((current + s).length > max && current) {
-      out.push(current.trim());
-      current = "";
-    }
-    if (s.length > max) {
-      for (let i = 0; i < s.length; i += max) out.push(s.slice(i, i + max));
-    } else current += s;
-  }
-  if (current.trim()) out.push(current.trim());
-  return out;
-}
 
 export function stopSpeaking() {
   controller?.abort();
@@ -58,13 +27,21 @@ export async function speak(id: string, markdown: string) {
   useStore.setState({ speaking: id });
   const voice = useStore.getState().settings?.voice;
   const parts = chunks(text);
+  let url: string | null = null;
+  // A piece is fetched while the one before it plays. Its handler is attached at once, so a failure
+  // during playback is reported when it is awaited, not as an unhandled rejection.
+  const fetchPiece = (piece: string) => {
+    const request = speakAudio(piece, voice, mine.signal);
+    request.catch(() => {});
+    return request;
+  };
   try {
-    let pending = speakAudio(parts[0], voice, mine.signal);
+    let pending = fetchPiece(parts[0]);
     for (let i = 0; i < parts.length; i++) {
       const blob = await pending;
-      if (i + 1 < parts.length) pending = speakAudio(parts[i + 1], voice, mine.signal);
+      if (i + 1 < parts.length) pending = fetchPiece(parts[i + 1]);
       if (mine.signal.aborted) return;
-      const url = URL.createObjectURL(blob);
+      url = URL.createObjectURL(blob);
       audio = new Audio(url);
       await new Promise<void>((resolve, reject) => {
         audio!.onended = () => resolve();
@@ -73,11 +50,14 @@ export async function speak(id: string, markdown: string) {
         audio!.play().catch(reject);
       });
       URL.revokeObjectURL(url);
+      url = null;
       if (mine.signal.aborted) return;
     }
   } catch (e) {
     if (!mine.signal.aborted) errorToast(e);
   } finally {
+    // A stopped clip keeps its object URL until here; release it now.
+    if (url) URL.revokeObjectURL(url);
     if (controller === mine) {
       controller = null;
       useStore.setState({ speaking: null });

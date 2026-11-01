@@ -1,0 +1,33 @@
+import { describe, it, expect } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import WebSocket from "ws";
+
+// Migrated from scripts/rust-scheduler-check.mjs. The checks throw on failure; vitest reports each one.
+
+describe("Rust routines and reminders", () => {
+  it("Rust routines and reminders", async () => {
+    const repo=fileURLToPath(new URL("../..", import.meta.url)), dir=fs.mkdtempSync(path.join(os.tmpdir(),"liquid-scheduler-")), data=path.join(dir,"data"),dist=path.join(dir,"dist"),bin=path.join(dir,"bin");
+    fs.mkdirSync(dist);fs.writeFileSync(path.join(dist,"index.html"),"<head></head>");fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,"notify-send"),`#!${process.execPath}\nprocess.exit(0);\n`,{mode:0o755});fs.mkdirSync(path.join(data,"engine"),{recursive:true});fs.mkdirSync(path.join(data,"models"));fs.writeFileSync(path.join(data,"models","LFM3-1.7B-Q4_K_M.gguf"),"test");fs.writeFileSync(path.join(data,"reminders.json"),JSON.stringify([{id:"due",text:"fixture reminder",at:Date.now()+2500}]));
+    const engine=path.join(data,"engine","llama-server");fs.writeFileSync(engine,`#!${process.execPath}
+    const http=require('http'),i=process.argv.indexOf('--port');http.createServer((q,s)=>{if(q.method==='GET')return s.end('{}');let body='';q.on('data',c=>body+=c);q.on('end',()=>{const messages=JSON.parse(body).messages, wants=messages.some(m=>m.role==='user'&&typeof m.content==='string'&&m.content.includes('set fixture reminder')), has=messages.some(m=>m.role==='user'&&typeof m.content==='string'&&m.content.startsWith('[result]'));const content=wants&&!has?'<tool_call><function=reminder><parameter=text>Future fixture</parameter><parameter=minutes>3</parameter></function></tool_call>':'Routine complete';s.writeHead(200,{'content-type':'text/event-stream'});s.end('data: '+JSON.stringify({choices:[{delta:{content}}]})+'\\n\\ndata: [DONE]\\n\\n');});}).listen(Number(process.argv[i+1]),'127.0.0.1');
+    `,{mode:0o755});
+    async function free(){const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;}const port=await free(),modelPort=await free(),base=`http://127.0.0.1:${port}`,sleep=ms=>new Promise(r=>setTimeout(r,ms));
+    const env={...process.env,LIQUID_AGENT_NO_AUTOSTART:"1",PATH:`${bin}:${process.env.PATH}`,LIQUID_AGENT_RUST_HOME:data,LIQUID_AGENT_WEB_DIST:dist,LIQUID_AGENT_RUST_PORT:String(port),LIQUID_AGENT_SMALL_PORT:String(modelPort),LIQUID_AGENT_SCHEDULE_INTERVAL_MS:'100'};let app,ws,token='';function check(v,m){if(!v)throw Error(m);console.log(`✓ ${m}`);}async function api(route,method='GET',body){const r=await fetch(base+route,{method,headers:{'x-liquid-token':token,'content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});if(!r.ok)throw Error(`${method} ${route}: ${r.status} ${await r.text()}`);return r.json();}
+    function event(predicate){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{ws.off('message',on);reject(Error('Timed out waiting for event'));},10000);function on(raw){const e=JSON.parse(raw.toString());if(predicate(e)){clearTimeout(timer);ws.off('message',on);resolve(e);}}ws.on('message',on);});}
+    try {
+     app=spawn(path.join(repo,'target/debug/liquid-server'),[],{env,stdio:['ignore','pipe','pipe']});let log='';app.stderr.on('data',d=>log+=d);for(let i=0;i<100;i++){try{const html=await(await fetch(base)).text();token=html.match(/name="liquid-token" content="([^"]+)"/)?.[1]||'';if(token)break;}catch{}await sleep(100);}if(!token)throw Error(log);
+     ws=new WebSocket(`ws://127.0.0.1:${port}/ws?t=${token}`,{origin:base});await once(ws,'open');const notification=event(e=>e.type==='notify'&&e.body==='fixture reminder');await notification;check(!(await api('/api/state')).reminders.some(r=>r.id==='due') && JSON.parse(fs.readFileSync(path.join(data,'reminders.json'))).length===0,'Due reminders are persisted and broadcast once');
+     await api('/api/settings','PATCH',{smallURL:`http://127.0.0.1:${modelPort}/v1`});await api('/api/parts/small/start','POST');for(let i=0;i<100;i++){if((await api('/api/state')).parts.find(p=>p.id==='small').status==='running')break;await sleep(100);}
+     const routine=await api('/api/routines','POST',{name:'Fixture routine',prompt:'Do fixture work'});const chat=await api(`/api/routines/${routine.id}/run`,'POST');check(chat.title==='Fixture routine' && chat.source==='routine' && chat.messages[0].content==='Do fixture work','Manual routine starts a named agent chat');let saved=(await api('/api/routines')).find(r=>r.id===routine.id);check(saved.lastChatId===chat.id && saved.lastRun>0,'Routine run persists its last chat and time');
+     const d=new Date(),hhmm=`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;const scheduled=await api('/api/routines','POST',{name:'Scheduled fixture',prompt:'Run scheduled fixture',schedule:{enabled:true,time:hhmm,days:[d.getDay()]}});let scheduledResult;for(let i=0;i<100;i++){scheduledResult=(await api('/api/routines')).find(r=>r.id===scheduled.id);if(scheduledResult.lastChatId)break;await sleep(50);}check(Boolean(scheduledResult.lastChatId),'Due routine runs on the local schedule');await sleep(500);let scheduledChats=(await api('/api/chats')).filter(c=>c.title==='Scheduled fixture');check(scheduledChats.length===1,'Scheduled routine does not run twice in the same minute');
+     const approval=event(e=>e.type==='chat'&&e.chat.messages?.at(-1)?.steps?.some(s=>s.status==='approval'));const reminderChat=await api('/api/chats','POST',{text:'set fixture reminder'});const pending=await approval;const step=pending.chat.messages.at(-1).steps.find(s=>s.status==='approval');await api(`/api/approvals/${step.id}`,'POST',{approve:true});let reminder;for(let i=0;i<100;i++){reminder=(await api('/api/state')).reminders.find(r=>r.text==='Future fixture');if(reminder)break;await sleep(50);}check(Boolean(reminder),'Approved agent reminder is saved and broadcast');await api(`/api/reminders/${reminder.id}`,'DELETE');check(!(await api('/api/state')).reminders.some(r=>r.id===reminder.id),'Reminder can be cancelled through the API');
+     await api(`/api/chats/${reminderChat.id}`,'DELETE');
+    } finally {if(ws)ws.terminate();if(app){const exit=once(app,'exit');app.kill('SIGINT');await exit;}fs.rmSync(dir,{recursive:true,force:true});}
+  }, 600_000);
+});

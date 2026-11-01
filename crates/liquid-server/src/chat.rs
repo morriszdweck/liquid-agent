@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 
 fn now() -> u64 {
@@ -446,7 +446,7 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
     chat["updatedAt"] = json!(now());
     let chat = chat.clone();
     let chat_id = chat["id"].as_str().unwrap().to_owned();
-    if let Err(e) = store::save(&app.data, "chats.json", &json!(next)) {
+    if let Err(e) = store::save_array(&app.data, "chats.json", &next) {
         return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
     *chats = next;
@@ -603,7 +603,7 @@ async fn respond(
         chat["updatedAt"] = json!(now());
         event = Some(chat.clone());
     }
-    if let Err(e) = store::save(&app.data, "chats.json", &json!(*chats)) {
+    if let Err(e) = store::save_array(&app.data, "chats.json", &chats) {
         eprintln!(
             "{}",
             liquid_core::i18n::diag_language()
@@ -653,6 +653,10 @@ async fn stream(
     }
     let mut stream = res.bytes_stream();
     let mut buffer = Vec::new();
+    // Start in the past, so the first words show at once.
+    let mut last_sent = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
     loop {
         let chunk = tokio::select! { _=cancel.cancelled()=>anyhow::bail!("Stopped."), chunk=stream.next()=>chunk };
         let Some(chunk) = chunk else { break };
@@ -693,14 +697,19 @@ async fn stream(
             {
                 *tokens = value;
             }
-            let (answer, leaked) = split_thinking(content);
-            let (visible, _) = visible_text(answer);
-            let thinking = if reasoning.is_empty() {
-                leaked
-            } else {
-                reasoning.as_str()
-            };
-            app.emit(json!({"type":"delta","chatId":chat_id,"messageId":reply_id,"text":visible,"thinking":thinking}));
+            // Rebuilding the visible text costs more the longer the reply gets, so it goes out at most every
+            // 60 ms. The reply's end sends the whole text, so nothing is lost by skipping the rest.
+            if last_sent.elapsed() >= Duration::from_millis(60) {
+                last_sent = Instant::now();
+                let (answer, leaked) = split_thinking(content);
+                let (visible, _) = visible_text(answer);
+                let thinking = if reasoning.is_empty() {
+                    leaked
+                } else {
+                    reasoning.as_str()
+                };
+                app.emit(json!({"type":"delta","chatId":chat_id,"messageId":reply_id,"text":visible,"thinking":thinking}));
+            }
         }
     }
     Ok(())
