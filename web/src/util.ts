@@ -1,4 +1,5 @@
 import type { Chat } from "./types";
+import { screenshot } from "./api";
 
 // The web UI is served to the same computer the server runs on, so the browser's platform is that computer's.
 export const IS_MAC = /Mac/.test(navigator.platform || navigator.userAgent);
@@ -73,24 +74,9 @@ export async function prepareImage(file: File): Promise<{ blob: Blob; name: stri
   }
 }
 
-/** Asks the browser to share a screen or window, grabs one frame and stops sharing. */
+/** One picture of the whole screen, from the server (the desktop app has no screen-sharing prompt). */
 export async function captureScreen(): Promise<Blob> {
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-  try {
-    const video = document.createElement("video");
-    video.srcObject = stream;
-    video.muted = true;
-    await video.play();
-    await new Promise((r) => setTimeout(r, 250));
-    const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
-    canvas.getContext("2d")!.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return await new Promise<Blob>((r) => canvas.toBlob((b) => r(b!), "image/jpeg", 0.9));
-  } finally {
-    stream.getTracks().forEach((t) => t.stop());
-  }
+  return screenshot();
 }
 
 export function chatMarkdown(chat: Chat) {

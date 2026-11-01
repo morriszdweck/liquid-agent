@@ -1,11 +1,11 @@
 // Packs the built app into one ready-to-run bundle, so installing and updating
 // need no npm or build step. Run after `npm run build`:
 //
-//   node scripts/bundle.mjs [--build N] [--url URL] [--out DIR]
+//   node scripts/bundle.mjs [--build N] [--url URL] [--out DIR] [--binaries DIR]
 //
-// Writes DIR/liquid-agent.tar.gz (one liquid-agent/ folder holding the server,
-// the built web UI and its runtime packages) and DIR/latest.json, which
-// installed copies read to find new builds. The build number defaults to the
+// Writes DIR/liquid-agent.tar.gz (one liquid-agent/ folder holding the Rust
+// server and launcher for each platform, and the built web UI) and DIR/latest.json,
+// which installed copies read to find new builds. The build number defaults to the
 // number of commits, so every push to main gets a bigger one.
 
 import { execFileSync } from "node:child_process";
@@ -27,6 +27,7 @@ const build = Number(arg("build", process.env.LIQUID_AGENT_BUILD ?? git("rev-lis
 const commit = process.env.GITHUB_SHA ?? git("rev-parse", "HEAD");
 const url = arg("url", `https://github.com/${repo}/releases/download/build-${build}/liquid-agent.tar.gz`);
 const out = path.resolve(arg("out", path.join(ROOT, "release")));
+const binaries = arg("binaries", "");
 if (!Number.isInteger(build) || build < 1) throw new Error("The build number must be a whole number above 0.");
 if (!fs.existsSync(path.join(ROOT, "web", "dist", "index.html"))) throw new Error("Run npm run build first.");
 
@@ -37,19 +38,21 @@ const copy = (from, to = from) =>
   fs.cpSync(path.join(ROOT, from), path.join(app, to), { recursive: true, filter: (src) => !skip.has(path.basename(src)) });
 
 try {
-  for (const part of ["server", "guardian", "bridge", "web/dist", "LICENSE", "README.md"]) copy(part);
-
-  // Runtime packages, with whatever they depend on in turn.
-  const wanted = [...Object.keys(pkg.dependencies ?? {})];
-  for (const name of wanted) {
-    const dir = path.join("node_modules", name);
-    if (fs.existsSync(path.join(app, dir))) continue;
-    fs.cpSync(path.join(ROOT, dir), path.join(app, dir), { recursive: true });
-    wanted.push(...Object.keys(JSON.parse(fs.readFileSync(path.join(ROOT, dir, "package.json"), "utf8")).dependencies ?? {}));
+  for (const part of ["web/dist", "LICENSE", "README.md"]) copy(part);
+  fs.mkdirSync(path.join(app, "bin"), { recursive: true });
+  // bin/liquid-server-<platform> is the server; bin/liquid-guardian-<platform> is the launcher and safety helper.
+  const platform = `${process.platform}-${process.arch}`;
+  if (binaries) {
+    fs.cpSync(path.resolve(binaries), path.join(app, "bin"), { recursive: true });
+  } else {
+    // A local build: the same profile for both programs.
+    for (const name of ["liquid-guardian", "liquid-server"]) {
+      const local = ["release", "debug"].map((profile) => path.join(ROOT, "target", profile, name)).find(fs.existsSync);
+      if (!local) throw new Error(`Build the Rust programs first: cargo build -p liquid-guardian -p liquid-server`);
+      fs.copyFileSync(local, path.join(app, "bin", `${name}-${platform}`));
+    }
   }
-
-  const { devDependencies, scripts, ...runtime } = pkg;
-  fs.writeFileSync(path.join(app, "package.json"), JSON.stringify({ ...runtime, scripts: { start: scripts.start } }, null, 2) + "\n");
+  fs.writeFileSync(path.join(app, "package.json"), JSON.stringify({ name: pkg.name, version: pkg.version, private: true }, null, 2) + "\n");
   fs.writeFileSync(path.join(app, "build.json"), JSON.stringify({ build, commit, repo, date: new Date().toISOString() }, null, 2) + "\n");
 
   fs.mkdirSync(out, { recursive: true });

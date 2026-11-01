@@ -15,6 +15,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Test Rust core
+        run: cargo test --workspace --locked
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - run: cargo build -p liquid-guardian -p liquid-server --locked
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -22,13 +27,49 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      - run: for f in server/*.js scripts/*.mjs; do node --check "$f"; done
-      - run: bash -n install.sh && bash -n scripts/start.sh
+      - run: for f in scripts/*.mjs; do node --check "$f"; done
+      - run: bash -n install.sh
       - run: npm test
-      - run: node scripts/bundle.mjs --build 1 && tar -tzf release/liquid-agent.tar.gz liquid-agent/build.json liquid-agent/node_modules/ws/package.json
+      - run: node scripts/rust-server-check.mjs
+      - run: node scripts/rust-autostart-check.mjs
+      - run: node scripts/rust-voice-check.mjs
+      - run: node scripts/rust-scheduler-check.mjs
+      - run: node scripts/rust-desktop-check.mjs
+      - run: node scripts/rust-media-tools-check.mjs
+      - run: node scripts/rust-installer-check.mjs
+      - run: node scripts/handover-check.mjs
+      - run: node scripts/bundle.mjs --build 1 && tar -tzf release/liquid-agent.tar.gz liquid-agent/build.json liquid-agent/web/dist/index.html liquid-agent/bin/ | grep -c liquid-server- | grep -qx 1
+      - if: runner.os == 'Linux'
+        run: node scripts/launcher-check.mjs
+
+  rust-binaries:
+    name: Rust server and launcher (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, name: linux-x64, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, name: linux-arm64, target: aarch64-unknown-linux-gnu }
+          - { os: macos-latest, name: darwin-arm64, target: aarch64-apple-darwin }
+          - { os: macos-latest, name: darwin-x64, target: x86_64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release --locked -p liquid-guardian -p liquid-server --target ${{ matrix.target }}
+      - run: |
+          mkdir -p binaries
+          cp target/${{ matrix.target }}/release/liquid-guardian binaries/liquid-guardian-${{ matrix.name }}
+          cp target/${{ matrix.target }}/release/liquid-server binaries/liquid-server-${{ matrix.name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-${{ matrix.name }}
+          path: binaries/*
+          if-no-files-found: error
 
   bundle:
     name: Ready-to-run bundle
+    needs: rust-binaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,11 +80,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci && npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rust-*
+          path: binaries
+          merge-multiple: true
+      - run: chmod +x binaries/liquid-*
+      - run: for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do test -s "binaries/liquid-guardian-$platform" && test -s "binaries/liquid-server-$platform"; done
       - name: Pack it, plus a newer build to test updating with
         run: |
-          node scripts/bundle.mjs
+          node scripts/bundle.mjs --binaries binaries
           next=$(( $(git rev-list --count HEAD) + 1 ))
-          node scripts/bundle.mjs --build "$next" --url http://127.0.0.1:8300/liquid-agent.tar.gz --out release-next
+          node scripts/bundle.mjs --binaries binaries --build "$next" --url http://127.0.0.1:8300/liquid-agent.tar.gz --out release-next
       - uses: actions/upload-artifact@v4
         with:
           name: bundle
@@ -65,11 +113,11 @@ jobs:
           node-version: 22
       - run: sudo apt-get update && sudo apt-get install -y xvfb xclip imagemagick ffmpeg pandoc libnotify-bin dunst dbus-x11
       - run: npm ci --omit=dev
-      - name: Check the clipboard, screen, conversions and ports
+      - name: Check the clipboard, screen, conversions, ports and reminders
         run: |
           xvfb-run -a dbus-run-session -- bash -c '
             dunst & sleep 1
-            node scripts/desktop-check.mjs'
+            cargo test -p liquid-server desktop_check -- --ignored --test-threads=1 --nocapture'
 
   install:
     name: One-line install and self-update on ${{ matrix.image }}
@@ -83,8 +131,8 @@ jobs:
     steps:
       - name: Install curl and tar
         run: |
-          if command -v apt-get >/dev/null; then apt-get update && apt-get install -y curl ca-certificates tar gzip procps
-          else dnf install -y curl tar gzip procps-ng findutils gawk; fi
+          if command -v apt-get >/dev/null; then apt-get update && apt-get install -y curl ca-certificates tar gzip procps python3
+          else dnf install -y curl tar gzip procps-ng findutils gawk python3; fi
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -101,12 +149,11 @@ jobs:
           curl -fs http://127.0.0.1:8170/healthz | grep -q liquid-agent
           test -f "$HOME/.local/share/applications/liquid-agent.desktop"
           test -x "$HOME/.local/bin/liquid-agent"
-          test -x "$HOME/.liquid-agent/node/bin/node"
+          test -x "$HOME/.liquid-agent/app/bin/liquid-server-linux-x64"
       - name: It updates itself to a newer build and comes back up
         run: |
-          node="$HOME/.liquid-agent/node/bin/node"
-          next="$("$node" -p 'require("/tmp/next/latest.json").build')"
-          (cd /tmp/next && "$node" -e 'const fs = require("fs"); require("http").createServer((q, s) => fs.createReadStream("." + q.url).on("error", () => { s.statusCode = 404; s.end(); }).pipe(s)).listen(8300, "127.0.0.1")' &)
+          next="$(grep -o '"build": *[0-9]*' /tmp/next/latest.json | grep -o '[0-9]*$')"
+          (cd /tmp/next && python3 -m http.server 8300 --bind 127.0.0.1 >/dev/null 2>&1 &)
           sleep 1
           token="$(curl -fs http://127.0.0.1:8170/ | grep -o 'liquid-token" content="[^"]*' | cut -d'"' -f3)"
           curl -fs -X POST -H "X-Liquid-Token: $token" http://127.0.0.1:8170/api/update/check | grep -q '"state":"ready"'
@@ -132,6 +179,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci && npm run build
+      - run: cargo build --locked -p liquid-guardian -p liquid-server
       - name: Download the engine and the smallest LFM3 1.7B, chat and run a tool
         run: node scripts/smoke.mjs --models
         timeout-minutes: 40
@@ -146,6 +194,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci && npm run build
+      - run: cargo build --locked -p liquid-guardian -p liquid-server
       - name: Download the engine and the smallest Omni, then speak, transcribe and describe a picture
         run: node scripts/smoke.mjs --omni
         timeout-minutes: 50
@@ -160,9 +209,15 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci && npm run build
-      - name: Install Auto 150M and Betterwright and start them
+      - run: cargo build --locked -p liquid-guardian -p liquid-server
+      - name: Install Auto 150M and the Web helper's browser, and start them
         run: node scripts/smoke.mjs --helpers
         timeout-minutes: 40
+      - name: Check the Web helper's browser through the server, with Chrome for Testing's headless shell
+        run: |
+          chrome="$(npx -y @puppeteer/browsers install chrome-headless-shell@stable | tail -1 | awk '{print $NF}')"
+          LIQUID_TEST_CHROME="$chrome" node scripts/rust-server-check.mjs
+        timeout-minutes: 20
 
   mac-app:
     name: Liquid Agent Mac app (DMG)
@@ -173,19 +228,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: desktop/package-lock.json
-      - run: npm ci
-        working-directory: desktop
-      - run: node --check main.cjs
-        working-directory: desktop
+      - run: npm ci && npm run build:setup
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Build the app for Apple silicon and Intel, signed ad hoc
-        run: npx electron-builder --mac dmg --arm64 --x64 --publish never
-        working-directory: desktop
+        run: |
+          scripts/mac-app.sh aarch64-apple-darwin arm64
+          scripts/mac-app.sh x86_64-apple-darwin x64
       - name: It is a real app with the right name and icon
         run: |
           for arch in arm64 x64; do test -s "desktop/dist/Liquid-Agent-$arch.dmg"; done
           test -x "desktop/dist/mac-arm64/Liquid Agent.app/Contents/MacOS/Liquid Agent"
           plutil -p "desktop/dist/mac-arm64/Liquid Agent.app/Contents/Info.plist" | grep -q codes.mincoffical.liquidagent
+          test -s "desktop/dist/mac-arm64/Liquid Agent.app/Contents/Resources/icon.icns"
       - uses: actions/upload-artifact@v4
         with:
           name: mac-app

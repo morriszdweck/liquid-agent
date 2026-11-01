@@ -1,0 +1,5 @@
+[workspace]
+members = ["crates/liquid-core", "crates/liquid-guardian", "crates/liquid-server"]
+default-members = ["crates/liquid-server"]
+exclude = ["crates/liquid-desktop"]
+resolver = "2"

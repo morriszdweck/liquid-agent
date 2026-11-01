@@ -17,20 +17,30 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
-import { ggufVariants, parseHfLink, probeGGUF } from "../server/models.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.SMOKE_PORT ?? 8199);
 const BASE = `http://127.0.0.1:${PORT}`;
+const GUARDIAN_PORT = Number(process.env.SMOKE_GUARDIAN_PORT ?? 18767);
 const MODELS = process.argv.includes("--models");
 const HELPERS = process.argv.includes("--helpers");
+const GUARDIAN = HELPERS || process.argv.includes("--guardian");
 const OMNI = process.argv.includes("--omni");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "liquid-agent-smoke-"));
+if (GUARDIAN && process.env.LIQUID_GUARDIAN_FIXTURE) {
+  fs.mkdirSync(path.join(home, "guardian"), { recursive: true });
+  for (const file of ["config.json", "model.safetensors", "tokenizer.json"]) {
+    fs.copyFileSync(path.join(process.env.LIQUID_GUARDIAN_FIXTURE, file), path.join(home, "guardian", file));
+  }
+}
 
 let log = "";
+// The server under test: the Rust binary (cargo build -p liquid-server).
+const SERVER = process.env.LIQUID_AGENT_SERVER ?? path.join(ROOT, "target", "debug", "liquid-server");
 function start() {
-  const child = spawn(process.execPath, [path.join(ROOT, "server", "index.js")], {
-    env: { ...process.env, LIQUID_AGENT_HOME: home, LIQUID_AGENT_PORT: String(PORT) },
+  const child = spawn(SERVER, [], {
+    cwd: ROOT,
+    env: { ...process.env, LIQUID_AGENT_HOME: home, LIQUID_AGENT_PORT: String(PORT), LIQUID_GUARDIAN_PORT: String(GUARDIAN_PORT) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (d) => (log += d));
@@ -63,51 +73,9 @@ function check(ok, message) {
   console.log(`✓ ${message}`);
 }
 
-// ---- Hugging Face model reading (no network) ----
+// The Rust unit tests (cargo test) cover the GGUF reader, Hugging Face links, memory,
+// tool-call parsing and the safety rules; this file tests the running server.
 
-const u32 = (n) => {
-  const b = Buffer.alloc(4);
-  b.writeUInt32LE(n);
-  return b;
-};
-const u64 = (n) => {
-  const b = Buffer.alloc(8);
-  b.writeBigUInt64LE(BigInt(n));
-  return b;
-};
-const ggufString = (text) => {
-  const b = Buffer.from(text);
-  return Buffer.concat([u64(b.length), b]);
-};
-const ggufPair = (key, type, body) => Buffer.concat([ggufString(key), u32(type), body]);
-const fixture = Buffer.concat([
-  Buffer.from("GGUF"),
-  u32(3),
-  u64(0),
-  u64(3),
-  ggufPair("general.architecture", 8, ggufString("llama")),
-  ggufPair("llama.context_length", 4, u32(8192)),
-  ggufPair("tokenizer.chat_template", 8, ggufString("{{ enable_thinking }}")),
-]);
-const fixtureFile = path.join(home, "fixture.gguf");
-fs.writeFileSync(fixtureFile, fixture);
-const probe = probeGGUF(fixtureFile);
-check(probe.architecture === "llama" && probe.contextLength === 8192 && probe.thinking, "it reads a GGUF header and finds its context and thinking mode");
-
-const parsed = parseHfLink("https://huggingface.co/org/model/blob/main/dir/model-Q4_K_M.gguf");
-check(parsed.repo === "org/model" && parsed.revision === "main" && parsed.file === "dir/model-Q4_K_M.gguf", "it reads a Hugging Face link to one model file");
-const variants = ggufVariants(
-  [
-    { path: "model-Q4_K_M-00001-of-00002.gguf", size: 10 },
-    { path: "model-Q4_K_M-00002-of-00002.gguf", size: 10 },
-    { path: "model-Q8_0.gguf", size: 20 },
-    { path: "mmproj-model.gguf", size: 5 },
-  ],
-  16,
-);
-check(variants.variants.length === 2 && variants.variants.some((v) => v.shards.length === 2), "it groups split GGUF files and skips projectors");
-
-/** Sends raw bytes and returns the response, for uploads and audio. */
 async function send(route, data, type, headers = {}) {
   const res = await fetch(BASE + route, { method: "POST", headers: { "x-liquid-token": token, "Content-Type": type, ...headers }, body: data });
   if (!res.ok) fail(`POST ${route} answered ${res.status}: ${await res.text()}`);
@@ -227,6 +195,13 @@ const ids = state.parts.map((p) => p.id);
 check(["engine", "small", "omni", "guardian", "browser"].every((id) => ids.includes(id)), "every part is listed");
 check(state.dataDir === home, "it keeps its files in the data folder it was given");
 check(state.routines.length > 0, "starter routines are there");
+const changed = await call("PATCH", "/api/settings", { theme: "dark", smallURL: "http://localhost@evil.example", maxSteps: "8" });
+check(changed.theme === "dark" && changed.smallURL === state.settings.smallURL && changed.maxSteps === state.settings.maxSteps, "Rust validates settings and rejects remote endpoints");
+const routine = await call("POST", "/api/routines", { name: "  Test routine  ", prompt: "Test", schedule: { enabled: true, time: "08:00", days: [5, 1, 1, 9] } });
+check(routine.name === "Test routine" && routine.schedule.days.join(",") === "1,5", "Rust validates new routines");
+const updatedRoutine = await call("PATCH", `/api/routines/${routine.id}`, { schedule: { time: "invalid", days: [3] } });
+check(updatedRoutine.schedule.time === "08:00" && updatedRoutine.schedule.enabled === false && updatedRoutine.schedule.days[0] === 3, "routine edits preserve valid schedule defaults");
+await call("DELETE", `/api/routines/${routine.id}`);
 
 if (MODELS) {
   await call("PATCH", "/api/settings", { smallQuant: "QAD-Q4_0" });
@@ -280,13 +255,20 @@ if (OMNI) {
   check(/red/i.test(reply.content), "it saw red");
 }
 
-if (HELPERS) {
-  await call("POST", "/api/parts/install", { ids: ["guardian", "browser"] });
+if (GUARDIAN) {
+  await call("POST", "/api/parts/install", { ids: HELPERS ? ["guardian", "browser"] : ["guardian"] });
   const running = (s, id) => s.parts.find((p) => p.id === id && p.status === "running");
   await waitFor("Auto 150M", (s) => running(s, "guardian"), 30);
   check(true, "Auto 150M runs");
-  await waitFor("the Web helper", (s) => running(s, "browser"), 30);
-  check(true, "the Web helper runs");
+  if (HELPERS) {
+    await waitFor("the Web helper", (s) => running(s, "browser"), 30);
+    check(true, "the Web helper runs");
+  }
+  const classified = await fetch(`http://127.0.0.1:${GUARDIAN_PORT}/classify`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool: "Bash", args: "ls", request: "List my files.", history: [] }),
+  }).then((res) => res.json());
+  check(typeof classified.p_deny === "number" && classified.p_deny >= 0 && classified.p_deny <= 1, "the Rust helper classifies an action");
   await call("PATCH", "/api/settings", { approvalMode: "approveForMe" });
   const mode = (await call("GET", "/api/settings")).approvalMode;
   check(mode === "approveForMe", "Approve for Me turns on");

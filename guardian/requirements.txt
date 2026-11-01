@@ -1,4 +1,0 @@
-torch
-transformers>=5
-huggingface_hub
-safetensors

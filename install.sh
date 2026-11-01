@@ -3,18 +3,16 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh | bash
 #
-# Works on macOS and on Linux (x86_64 or arm64). The app goes in ~/.liquid-agent,
-# with its own copy of Node.js if this computer has none new enough. It comes
-# ready to run (no npm or build step) and keeps itself up to date after this.
+# Works on macOS and on Linux (x86_64 or arm64). The app goes in ~/.liquid-agent.
+# It is all Rust (the server, the launcher and the Web helper's browser control), so
+# nothing else needs installing, and it keeps itself up to date after this.
 # It adds "Liquid Agent" to the app menu (Linux; on macOS the Mac app opens it) and a
-# `liquid-agent` command, then opens the setup screen. Models
-# are downloaded from there.
+# `liquid-agent` command, then opens the setup screen. Models are downloaded from there.
 set -euo pipefail
 
 REPO="${LIQUID_AGENT_REPO:-morriszdweck/liquid-agent}"
 BRANCH="${LIQUID_AGENT_BRANCH:-main}"
 ROOT="${LIQUID_AGENT_HOME:-$HOME/.liquid-agent}"
-NODE_VERSION="22.11.0"
 PORT="${LIQUID_AGENT_PORT:-8170}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -29,12 +27,10 @@ ARCH="$(uname -m)"
 case "$OS" in
   Darwin)
     DATA="$HOME/Library/Application Support/LiquidAgent"
-    node_os="darwin"
     [ "$ARCH" = "arm64" ] || bold "Heads up: Liquid Agent is built for Apple silicon. It will be slow on this Mac."
     ;;
   Linux)
     DATA="${XDG_DATA_HOME:-$HOME/.local/share}/liquid-agent"
-    node_os="linux"
     case "$ARCH" in
       x86_64 | aarch64 | arm64) ;;
       *) fail "Liquid Agent runs on 64-bit Intel, AMD or ARM computers. This one is $ARCH." ;;
@@ -49,45 +45,12 @@ sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum 
 bold "Installing Liquid Agent"
 mkdir -p "$ROOT/bin" "$DATA/logs"
 
-# ---- Node.js: use one that is new enough, or keep a private copy ----
-
-find_node() {
-  for candidate in "$ROOT/node/bin/node" "$(command -v node 2>/dev/null || true)" /opt/homebrew/bin/node /usr/local/bin/node; do
-    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
-    major="$("$candidate" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
-    if [ "$major" -ge 22 ]; then
-      echo "$candidate"
-      return
-    fi
-  done
-}
-
-NODE="$(find_node)"
-if [ -z "$NODE" ]; then
-  node_arch="arm64"
-  [ "$ARCH" = "x86_64" ] && node_arch="x64"
-  file="node-v$NODE_VERSION-$node_os-$node_arch.tar.gz"
-  step "Getting Node.js $NODE_VERSION"
-  tmp="$(mktemp -d)"
-  curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/$file" -o "$tmp/$file"
-  expected="$(curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" | awk -v f="$file" '$2 == f { print $1 }')"
-  actual="$(sha256 "$tmp/$file")"
-  [ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "The Node.js download didn't match its checksum. Try again."
-  rm -rf "$ROOT/node"
-  mkdir -p "$ROOT/node"
-  tar -xzf "$tmp/$file" -C "$ROOT/node" --strip-components 1
-  rm -rf "$tmp"
-  NODE="$ROOT/node/bin/node"
-fi
-export PATH="$(dirname "$NODE"):$PATH"
-step "Using Node.js $("$NODE" -v)"
-
 # ---- The app ----
 
 # Stop a running copy first so its files can be replaced.
 if curl -fs --max-time 2 "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q liquid-agent; then
   step "Stopping the running Liquid Agent"
-  pkill -f "$ROOT/app/server/index.js" 2>/dev/null || true
+  pkill -f "$ROOT/app/bin/liquid-server-" 2>/dev/null || true
   sleep 2
 fi
 
@@ -99,13 +62,25 @@ else
   # Every push to main publishes a ready-to-run bundle, so nothing is built here.
   curl -fsSL "https://github.com/$REPO/releases/latest/download/latest.json" -o "$tmp/latest.json" ||
     fail "Couldn't reach GitHub to download Liquid Agent. Check your connection and try again."
-  url="$("$NODE" -p 'require(process.argv[1]).url' "$tmp/latest.json")"
-  expected="$("$NODE" -p 'require(process.argv[1]).sha256' "$tmp/latest.json")"
+  # latest.json is written by scripts/bundle.mjs: one "key": "value" pair per line.
+  json_value() { grep -o "\"$1\": *\"[^\"]*\"" "$2" | head -1 | sed 's/.*: *"\([^"]*\)"$/\1/'; }
+  url="$(json_value url "$tmp/latest.json")"
+  expected="$(json_value sha256 "$tmp/latest.json")"
+  [ -n "$url" ] && [ -n "$expected" ] || fail "The update feed doesn't look like Liquid Agent's."
   curl -fsSL "$url" -o "$tmp/app.tar.gz" || fail "The download didn't finish. Try again."
   [ "$(sha256 "$tmp/app.tar.gz")" = "$expected" ] || fail "The download didn't match its checksum. Try again."
 fi
 tar -xzf "$tmp/app.tar.gz" -C "$tmp"
-[ -f "$tmp/liquid-agent/server/index.js" ] && [ -f "$tmp/liquid-agent/build.json" ] || fail "That download doesn't look like Liquid Agent."
+case "$OS-$ARCH" in
+  Linux-x86_64) native="linux-x64" ;;
+  Linux-aarch64|Linux-arm64) native="linux-arm64" ;;
+  Darwin-arm64) native="darwin-arm64" ;;
+  Darwin-x86_64) native="darwin-x64" ;;
+  *) fail "No launcher is available for $OS $ARCH." ;;
+esac
+[ -f "$tmp/liquid-agent/build.json" ] || fail "That download doesn't look like Liquid Agent."
+[ -f "$tmp/liquid-agent/bin/liquid-server-$native" ] || fail "This bundle does not contain a server for $native."
+[ -f "$tmp/liquid-agent/bin/liquid-guardian-$native" ] || fail "This bundle does not contain a launcher for $native."
 rm -rf "$ROOT/app.old" "$ROOT/app.next" "$ROOT/app.download" "$ROOT/app.bad"
 [ -d "$ROOT/app" ] && mv "$ROOT/app" "$ROOT/app.old"
 mv "$tmp/liquid-agent" "$ROOT/app"
@@ -113,46 +88,14 @@ rm -rf "$tmp" "$ROOT/app.old"
 
 # ---- Ways to open it ----
 
-cat >"$ROOT/bin/liquid-agent" <<EOF
-#!/bin/bash
-# Opens Liquid Agent, starting it in the background if needed.
-#   liquid-agent          open it
-#   liquid-agent stop     stop it and its models
-#   liquid-agent update   get the newest version now (it also updates by itself)
-#   liquid-agent logs     show what it printed
-ROOT="$ROOT"
-DATA="$DATA"
-PORT="$PORT"
-export PATH="$(dirname "$NODE"):\$PATH"
-running() { curl -fs --max-time 2 "http://127.0.0.1:\$PORT/healthz" 2>/dev/null | grep -q liquid-agent; }
-show() {
-  if [ "\$(uname -s)" = Darwin ]; then
-    open "\$1"
-  elif [ -n "\${DISPLAY:-}\${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null; then
-    (xdg-open "\$1" >/dev/null 2>&1 &)
-  else
-    echo "Open \$1 in your browser." # no desktop here, e.g. over SSH
-  fi
-}
-case "\${1:-open}" in
-  open)
-    if [ "\$(uname -s)" = Darwin ] && [ -x "/Applications/Liquid Agent.app/Contents/MacOS/Liquid Agent" ]; then
-      open -a "/Applications/Liquid Agent.app" # it starts Liquid Agent if needed
-    elif running; then
-      show "http://127.0.0.1:\$PORT"
-    else
-      echo "Starting Liquid Agent at http://127.0.0.1:\$PORT"
-      mkdir -p "\$DATA/logs"
-      nohup "$NODE" "\$ROOT/app/server/index.js" --open </dev/null >>"\$DATA/logs/server.log" 2>&1 &
-    fi
-    ;;
-  stop) pkill -f "\$ROOT/app/server/index.js" && echo "Stopped." || echo "It wasn't running." ;;
-  update) curl -fsSL "https://raw.githubusercontent.com/$REPO/$BRANCH/install.sh" | bash ;;
-  logs) tail -n 80 "\$DATA/logs/server.log" ;;
-  *) echo "Use: liquid-agent [open|stop|update|logs]" ;;
-esac
-EOF
-chmod +x "$ROOT/bin/liquid-agent"
+# The release bundle includes a Rust launcher and server for each supported platform.
+cp "$ROOT/app/bin/liquid-guardian-$native" "$ROOT/bin/liquid-agent.new"
+chmod +x "$ROOT/bin/liquid-agent.new"
+mv -f "$ROOT/bin/liquid-agent.new" "$ROOT/bin/liquid-agent"
+# The launcher reads these settings; quotes and backslashes in the paths are escaped.
+json_string() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+printf '{"root":"%s","data":"%s","port":"%s","repo":"%s","branch":"%s"}\n' \
+  "$(json_string "$ROOT")" "$(json_string "$DATA")" "$PORT" "$(json_string "$REPO")" "$(json_string "$BRANCH")" >"$ROOT/bin/launcher.json"
 
 mkdir -p "$HOME/.local/bin"
 ln -sf "$ROOT/bin/liquid-agent" "$HOME/.local/bin/liquid-agent"

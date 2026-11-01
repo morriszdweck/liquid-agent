@@ -1,8 +1,9 @@
 node_modules/
 web/dist/
-guardian/.venv/
-bridge/node_modules/
-__pycache__/
+desktop/setup-dist/
 .DS_Store
 release/
 release-*/
+
+/target/
+crates/*/target/

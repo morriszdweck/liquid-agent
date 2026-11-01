@@ -3,7 +3,7 @@
 A private AI agent for your Mac or Linux computer that runs **LFM3 1.7B** and **LFM3 Omni 2B** entirely on your computer, with a clean web interface in your browser.
 
 - **Chat** with full Markdown: tables, code with highlighting and copy buttons, math, task lists.
-- **Does things on your computer**: runs commands, reads and writes files, searches and reads the web, opens apps and links, sets reminders, uses the clipboard, and clicks around websites with [Betterwright](https://www.npmjs.com/package/betterwright).
+- **Does things on your computer**: runs commands, reads and writes files, searches and reads the web, opens apps and links, sets reminders, uses the clipboard, and clicks around websites in a headless Chrome.
 - **Voice chat** with LFM3 Omni 2B: it listens, thinks and talks back in one model. Talk over it to interrupt. Turn on the camera and it also sees what you show it.
 - **Omni where it matters**: dictation, reading answers aloud, pictures, audio and your screen all go through LFM3 Omni 2B. Everyday text and documents go to the Everyday brain (LFM3 1.7B). The app picks the model for you.
 - **Thinks first**: the built-in LFM3 1.7B reasons before every answer. The reasoning stays folded away; tap **Thinking for a better answer…** to read it. LFM3 Omni 2B, or a custom model whose template has no thinking mode, answers right away.
@@ -29,15 +29,15 @@ Or paste this into Terminal on macOS, or a terminal on Linux:
 curl -fsSL https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh | bash
 ```
 
-It installs a ready-to-run copy in `~/.liquid-agent` (no npm or build step, and a private copy of Node.js if you don't have one), adds **Liquid Agent** to your app menu on Linux and a `liquid-agent` command, then opens the setup screen at <http://127.0.0.1:8170> (in the Mac app when it's installed). Pick what to download and a model size there; that's it.
+It installs a ready-to-run copy in `~/.liquid-agent` (nothing else to install and no build step), adds **Liquid Agent** to your app menu on Linux and a `liquid-agent` command, then opens the setup screen at <http://127.0.0.1:8170> (in the Mac app when it's installed). Pick what to download and a model size there; that's it.
 
-Afterwards, open it from Applications, Spotlight or your app menu, or with `liquid-agent`. The Mac app is a window onto that same copy (`desktop/`), so it updates along with it. `liquid-agent stop` stops it.
+Afterwards, open it from Applications, Spotlight or your app menu, or with `liquid-agent`. The Mac app is a window onto that same copy (`crates/liquid-desktop`), so it updates along with it. `liquid-agent stop` stops it.
 
 It keeps itself up to date: every push to `main` is published as a release, new versions download in the background and go in when nothing is running, and if one doesn't start the previous version comes back. Turn this off in Settings → General; `liquid-agent update` gets the newest version right away.
 
 Requirements: an Apple silicon Mac with macOS 14 or later, or a 64-bit Linux computer (see [Linux](#linux)), and about 4 GB of free space for everything (1.1 GB for text chat only).
 
-From a clone instead (it won't update itself; use `git pull`): double-click **Liquid Agent.command** on macOS, run `scripts/start.sh`, or run `npm ci && npm run build && npm start` (Node.js 22 or newer).
+From a clone instead (it won't update itself; use `git pull`): install Rust, and Node.js 22 or newer to build the web UI (it isn't needed to run), then run `cargo build --release -p liquid-guardian -p liquid-server && npm ci && npm run build && npm start`.
 
 ## Linux
 
@@ -59,7 +59,7 @@ sudo apt install wl-clipboard xclip ffmpeg libnotify-bin imagemagick pandoc
 
 Screenshots use `grim` on Wayland (or GNOME's and KDE's own screenshot tools, or the desktop's screenshot portal, which asks you first) and `import`, `scrot` or `maim` on X11.
 
-**Not yet on Linux:** the Web helper's browser needs an x86_64 computer, and the safety helper uses the CPU version of PyTorch.
+**Not yet on Linux:** the Web helper's browser needs an x86_64 computer. The safety helper runs on the CPU.
 
 ## What gets downloaded
 
@@ -68,8 +68,8 @@ Screenshots use `grim` on Wayland (or GNOME's and KDE's own screenshot tools, or
 | AI engine | [llama.cpp](https://github.com/ggml-org/llama.cpp) server, latest release | ~30 MB |
 | Everyday brain | [LFM3 1.7B](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) (GGUF, QAD-Q4_0 to F16) | 1.05–3.5 GB |
 | Eyes and ears | [LFM3 Omni 2B](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF) (Q4_0 to F16) plus its audio and vision projector | 1.6–4 GB |
-| Safety helper | Auto 150M, run with Python through `uv` | ~1.1 GB |
-| Web helper | Betterwright and its browser | ~250 MB |
+| Safety helper | Auto 150M, run by the Rust guardian | ~300 MB |
+| Web helper | Chrome for Testing's headless shell | ~250 MB |
 
 Files live in `~/Library/Application Support/LiquidAgent` on macOS and `~/.local/share/liquid-agent` on Linux. Settings → Downloads switches model sizes (the old size keeps answering until the new one is ready) and removes any part.
 
@@ -78,30 +78,37 @@ Files live in `~/Library/Application Support/LiquidAgent` on macOS and `~/.local
 ## How it works
 
 ```
-browser ──HTTP/WebSocket──▶ server/ (Node, 127.0.0.1:8170)
+browser ──HTTP/WebSocket──▶ crates/liquid-server (Rust, 127.0.0.1:8170)
                               ├─ llama-server  Everyday brain :8180  (LFM3 1.7B or your GGUF)
                               ├─ llama-server  LFM3 Omni 2B   :8181  (chat, ASR, TTS, realtime voice)
-                              ├─ guardian/     Auto 150M      :8766
-                              └─ bridge/       Betterwright   :8767
+                              ├─ liquid-guardian Auto 150M     :8766
+                              └─ Web helper   Chrome headless :8767 (the same server, in bridge mode)
 ```
 
-- `server/agent.js` runs the agent loop. LFM3 writes tool calls in its native format; `server/toolparser.js` reads that and the other common forms.
-- `server/models.js` reads Hugging Face links, finds and groups GGUF files, picks a size for this computer and checks a model's header before it runs.
-- `server/prompt.js` keeps prompts small: a short system prompt, only relevant memories, and older tool results trimmed to fit the context budget.
-- `server/voice.js` bridges the browser microphone to Omni's realtime API and runs tools in the middle of a conversation.
-- `web/` is a React app built with Vite into `web/dist`, which the server hosts.
+- `crates/liquid-server/src/chat.rs` runs the agent loop. LFM3 writes tool calls in its native format; `crates/liquid-core/src/toolparser.rs` reads that and the other common forms.
+- `crates/liquid-core/src/models.rs` and `gguf.rs` read Hugging Face links, find and group GGUF files, pick a size for this computer and check a model's header before it runs.
+- `crates/liquid-server/src/voice.rs` bridges the browser microphone to Omni's realtime API and runs tools in the middle of a conversation.
+- `crates/liquid-server/src/updater.rs` downloads and checks new builds; `crates/liquid-guardian/src/handover.rs` swaps the folders and rolls back if a new build doesn't start.
+- `web/` is a React and TypeScript app built with Vite into `web/dist`, which the server hosts. `desktop/setup/` is the first-run screen of the Mac app, also TypeScript built with Vite; the Mac app inlines it.
 
 The server only accepts requests from this computer, from its own page, carrying a token that changes every launch.
 
 ## Develop
 
+The server is Rust (`crates/liquid-server`): it serves the web UI and its API, runs the agent, the models, voice, routines, reminders, self-updates and the Web helper, which drives a headless Chrome over the DevTools protocol (`crates/liquid-server/src/browser_bridge.rs`). `crates/liquid-guardian` is the `liquid-agent` command and the Auto 150M safety helper. `crates/liquid-desktop` is the Mac app's window. The web UI (`web/`) and the Mac app's setup screen (`desktop/setup/`) are TypeScript built with Vite.
+
 ```bash
+cargo build --release -p liquid-guardian -p liquid-server
 npm ci
-npm run dev        # rebuilds the UI and restarts the server on changes
-npm run typecheck
-npm test           # starts the server and checks its API
+npm run dev        # rebuilds the UI and runs the Rust server
+npm run typecheck  # TypeScript for the web UI and the setup screen
+cargo test --workspace   # Rust unit tests
+npm test           # starts the server and checks its API (needs the debug build above)
 node scripts/bundle.mjs --build 1   # packs release/liquid-agent.tar.gz and latest.json, as CI does for releases
+npm run build:setup && scripts/mac-app.sh aarch64-apple-darwin arm64   # on a Mac: the Mac app and its DMG
 ```
+
+Run the server on its own with `LIQUID_AGENT_RUST_HOME=/tmp/liquid-agent-test cargo run -p liquid-server` (port 8170 by default; `LIQUID_AGENT_PORT` changes it). Desktop tests that need a real session run with `cargo test -p liquid-server desktop_check -- --ignored --test-threads=1`.
 
 ## License
 

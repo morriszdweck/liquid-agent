@@ -1,0 +1,18 @@
+[package]
+name = "liquid-desktop"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+description = "Liquid Agent for macOS: a native window onto the Liquid Agent that runs on this computer."
+
+# Built on its own (cargo build --manifest-path crates/liquid-desktop/Cargo.toml), so the
+# server and launcher build without the webview toolkit.
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+libc = "0.2"
+tao = "0.37"
+wry = "0.57"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.21"
