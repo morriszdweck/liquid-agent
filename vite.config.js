@@ -9,4 +9,8 @@ export default defineConfig({
     emptyOutDir: true,
     chunkSizeWarningLimit: 1500,
   },
+  test: {
+    include: ["src/**/*.test.ts"],
+    environment: "node",
+  },
 });

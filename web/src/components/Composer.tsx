@@ -26,6 +26,9 @@ import { captureScreen, clock, cx, IS_MAC, prepareImage } from "../util";
 import { Menu, Spinner } from "./ui";
 import { t } from "../i18n";
 
+/** Five minutes of 16 kHz speech: about 10 MB of WAV, well inside the server's upload limit. */
+const DICTATION_LIMIT = 16000 * 300;
+
 type Pending = { key: string; name: string; kind: Attachment["kind"]; preview?: string; uploaded?: Attachment; failed?: boolean };
 
 export const modes = (): { value: ApprovalMode; label: string; detail: string; icon: JSX.Element }[] => [
@@ -215,9 +218,13 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   async function startDictation() {
     if (!omniUp) return toast(t("composer.dictationNeedsEyes"), "error");
     const chunks: Int16Array[] = [];
+    let heard = 0;
     const m = new Microphone(16000, (f) => {
       chunks.push(f.pcm);
+      heard += f.pcm.length;
       setLevel(f.rms);
+      // Long recordings outgrow the upload limit and the model's context, so a dictation ends at the cap and is written down.
+      if (heard >= DICTATION_LIMIT) void stopDictation(true);
     });
     try {
       await m.start();

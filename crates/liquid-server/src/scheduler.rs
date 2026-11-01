@@ -193,7 +193,7 @@ pub async fn run(app: &App, id: &str, scheduled: bool) -> Response {
             c["source"] = json!("routine");
             c["named"] = json!(true);
             created = c.clone();
-            if store::save(&app.data, "chats.json", &json!(next)).is_ok() {
+            if store::save_array(&app.data, "chats.json", &next).is_ok() {
                 *chats = next;
             }
         }

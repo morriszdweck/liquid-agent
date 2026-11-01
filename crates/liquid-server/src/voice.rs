@@ -34,21 +34,29 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+/// Changes one voice chat and saves it. Only that chat is copied, and the list is written once.
 fn edit(app: &App, id: &str, f: impl FnOnce(&mut Value)) -> anyhow::Result<()> {
     let mut chats = app.chats.lock().unwrap();
-    let mut next = chats.clone();
-    let chat = next
-        .iter_mut()
-        .find(|c| c["id"] == id)
+    let index = chats
+        .iter()
+        .position(|c| c["id"] == id)
         .ok_or_else(|| anyhow::anyhow!("Voice chat no longer exists"))?;
-    f(chat);
+    let mut chat = chats[index].clone();
+    f(&mut chat);
     chat["updatedAt"] = json!(now());
-    let event = chat.clone();
-    store::save(&app.data, "chats.json", &json!(next))?;
-    *chats = next;
+    let previous = std::mem::replace(&mut chats[index], chat.clone());
+    if let Err(e) = store::save_array(&app.data, "chats.json", &chats) {
+        chats[index] = previous;
+        return Err(e.into());
+    }
     drop(chats);
-    app.emit(json!({"type":"chat","chat":event}));
+    app.emit(json!({"type":"chat","chat":chat}));
     Ok(())
+}
+/// Shows a streamed reply to the chat window as it grows. It is saved when the turn ends, as text chat does,
+/// because saving the whole history for every word is most of the work of a long reply.
+fn stream(app: &App, chat: &str, reply: &str, text: &str) {
+    app.emit(json!({"type":"delta","chatId":chat,"messageId":reply,"text":text}));
 }
 fn make_chat(app: &App, requested: Option<&str>) -> anyhow::Result<String> {
     let mut chats = app.chats.lock().unwrap();
@@ -58,10 +66,11 @@ fn make_chat(app: &App, requested: Option<&str>) -> anyhow::Result<String> {
     let id = store::id();
     let stamp = now();
     let chat = json!({"id":id,"title":"Voice chat","source":"voice","named":true,"createdAt":stamp,"updatedAt":stamp,"pinned":false,"messages":[]});
-    let mut next = chats.clone();
-    next.insert(0, chat.clone());
-    store::save(&app.data, "chats.json", &json!(next))?;
-    *chats = next;
+    chats.insert(0, chat.clone());
+    if let Err(e) = store::save_array(&app.data, "chats.json", &chats) {
+        chats.remove(0);
+        return Err(e.into());
+    }
     drop(chats);
     app.emit(json!({"type":"chat","chat":chat}));
     Ok(id)
@@ -134,23 +143,6 @@ fn instructions(app: &App, chat: &str, settings: &Value) -> String {
         strings.voice_earlier
     )
 }
-fn wav(pcm: &[u8], rate: u32) -> Vec<u8> {
-    let mut out = Vec::with_capacity(44 + pcm.len());
-    out.extend(b"RIFF");
-    out.extend((36 + pcm.len() as u32).to_le_bytes());
-    out.extend(b"WAVEfmt ");
-    out.extend(16u32.to_le_bytes());
-    out.extend(1u16.to_le_bytes());
-    out.extend(1u16.to_le_bytes());
-    out.extend(rate.to_le_bytes());
-    out.extend((rate * 2).to_le_bytes());
-    out.extend(2u16.to_le_bytes());
-    out.extend(16u16.to_le_bytes());
-    out.extend(b"data");
-    out.extend((pcm.len() as u32).to_le_bytes());
-    out.extend(pcm);
-    out
-}
 async fn send(socket: &mut WebSocket, value: Value) -> bool {
     socket
         .send(Message::Text(value.to_string().into()))
@@ -170,15 +162,39 @@ fn begin(app: &App, chat: &str, text: &str) -> anyhow::Result<(String, String)> 
     })?;
     Ok((uid, rid))
 }
-fn finish(app: &App, chat: &str, reply: &str, status: &str) {
+/// Ends a reply: saves what was said and how it ended.
+fn finish(app: &App, chat: &str, reply: &str, status: &str, said: &str) {
     let _ = edit(app, chat, |c| {
         if let Some(m) = c["messages"]
             .as_array_mut()
             .and_then(|ms| ms.iter_mut().find(|m| m["id"] == reply))
         {
+            m["content"] = json!(said);
             m["status"] = json!(status);
         }
     });
+}
+#[cfg(test)]
+mod tests {
+    use super::is_jpeg_base64;
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    #[test]
+    fn recognises_a_jpeg_from_its_first_base64_group() {
+        let jpeg = BASE64.encode([0xff, 0xd8, 0xff, 0xe0, 0, 16, b'J', b'F']);
+        assert!(is_jpeg_base64(&jpeg));
+        assert!(!is_jpeg_base64(&BASE64.encode(b"\x89PNG\r\n")));
+        assert!(!is_jpeg_base64(""));
+        assert!(!is_jpeg_base64("not base64!"));
+    }
+}
+
+/// A JPEG starts with FF D8 FF. The first base64 group is enough to tell, so a whole frame isn't decoded to check it.
+fn is_jpeg_base64(image: &str) -> bool {
+    image
+        .get(..4)
+        .and_then(|head| BASE64.decode(head).ok())
+        .is_some_and(|bytes| bytes.starts_with(&[0xff, 0xd8]))
 }
 #[derive(Debug)]
 enum AsyncEvent {
@@ -187,11 +203,7 @@ enum AsyncEvent {
     Camera(u64, String),
 }
 async fn describe(url: String, image: String) -> anyhow::Result<String> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(20))
-        .build()?;
-    let res=client.post(format!("{}/chat/completions",url.trim_end_matches('/'))).json(&json!({"model":"LFM3-Omni-2B","temperature":0,"max_tokens":120,"stream":false,"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":format!("data:image/jpeg;base64,{image}")}},{"type":"text","text":"This is a frame from the user's camera during a voice call. In one or two short sentences, describe what it shows."}]}]})).send().await?.error_for_status()?;
+    let res=media::client()?.post(format!("{}/chat/completions",url.trim_end_matches('/'))).timeout(Duration::from_secs(20)).json(&json!({"model":"LFM3-Omni-2B","temperature":0,"max_tokens":120,"stream":false,"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":format!("data:image/jpeg;base64,{image}")}},{"type":"text","text":"This is a frame from the user's camera during a voice call. In one or two short sentences, describe what it shows."}]}]})).send().await?.error_for_status()?;
     let mut stream = res.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -330,11 +342,11 @@ async fn run(app: App, mut socket: WebSocket) {
                 Message::Binary(bytes)=>{if heard.len()+bytes.len()>input_rate as usize*2*60 {send(&mut socket,json!({"type":"error","message":"Voice input is too long."})).await;heard.clear();up!(json!({"type":"input_audio_buffer.clear"}));continue;} heard.extend_from_slice(&bytes);up!(json!({"type":"input_audio_buffer.append","audio":BASE64.encode(bytes)}));},
                 Message::Text(raw)=>{let Ok(message)=serde_json::from_str::<Value>(&raw) else{continue};match message["type"].as_str().unwrap_or("") {
                     "stop"=>break,
-                    "cancel"=>{heard.clear();turn_cancel.cancel();if responding && !discarding {up!(json!({"type":"response.cancel"})); discarding=true;} queued_response=false;calls.clear();if let Some(id)=reply.take(){finish(&app,&chat,&id,"stopped");send(&mut socket,json!({"type":"turn.done"})).await;}send(&mut socket,json!({"type":"state","state":"listening"})).await;},
-                    "frame"=>{if let Some(image)=message["image"].as_str().filter(|s|s.len()<3_000_000){if BASE64.decode(image).ok().is_some_and(|b|b.starts_with(&[0xff,0xd8])) {camera_seq+=1;let frame=(camera_seq,image.to_owned());if camera_busy{queued_frame=Some(frame);}else{camera_busy=true;let tx=tx.clone();let url=url.to_owned();tokio::spawn(async move{let _=tx.send(AsyncEvent::Camera(frame.0,describe(url,frame.1).await.unwrap_or_default()));});}}}},
-                    "text" | "commit"=>{let is_audio=message["type"]=="commit";let spoken=if is_audio {"…".to_owned()} else {message["text"].as_str().unwrap_or("").trim().chars().take(8000).collect()};if spoken.is_empty(){continue;}if is_audio && heard.len()<input_rate as usize*2*3/10 {heard.clear();up!(json!({"type":"input_audio_buffer.clear"}));continue;}if let Some(id)=reply.take(){turn_cancel.cancel();finish(&app,&chat,&id,"stopped");}turn_cancel=session_cancel.child_token();if responding && !discarding {up!(json!({"type":"response.cancel"}));discarding=true;}calls.clear();let Ok((uid,rid))=begin(&app,&chat,&spoken) else{break};user=spoken.clone();reply=Some(rid);text.clear();audio_bytes=0;
+                    "cancel"=>{heard.clear();turn_cancel.cancel();if responding && !discarding {up!(json!({"type":"response.cancel"})); discarding=true;} queued_response=false;calls.clear();if let Some(id)=reply.take(){finish(&app,&chat,&id,"stopped",&text);send(&mut socket,json!({"type":"turn.done"})).await;}send(&mut socket,json!({"type":"state","state":"listening"})).await;},
+                    "frame"=>{if let Some(image)=message["image"].as_str().filter(|s|s.len()<3_000_000){if is_jpeg_base64(image) {camera_seq+=1;let frame=(camera_seq,image.to_owned());if camera_busy{queued_frame=Some(frame);}else{camera_busy=true;let tx=tx.clone();let url=url.to_owned();tokio::spawn(async move{let _=tx.send(AsyncEvent::Camera(frame.0,describe(url,frame.1).await.unwrap_or_default()));});}}}},
+                    "text" | "commit"=>{let is_audio=message["type"]=="commit";let spoken=if is_audio {"…".to_owned()} else {message["text"].as_str().unwrap_or("").trim().chars().take(8000).collect()};if spoken.is_empty(){continue;}if is_audio && heard.len()<input_rate as usize*2*3/10 {heard.clear();up!(json!({"type":"input_audio_buffer.clear"}));continue;}if let Some(id)=reply.take(){turn_cancel.cancel();finish(&app,&chat,&id,"stopped",&text);}turn_cancel=session_cancel.child_token();if responding && !discarding {up!(json!({"type":"response.cancel"}));discarding=true;}calls.clear();let Ok((uid,rid))=begin(&app,&chat,&spoken) else{break};user=spoken.clone();reply=Some(rid);text.clear();audio_bytes=0;
                         let note=if seen.0>0 {format!("(On camera right now: {})",seen.1)}else{String::new()};
-                        if is_audio {let audio=std::mem::take(&mut heard);up!(json!({"type":"input_audio_buffer.commit"}));if !note.is_empty(){up!(json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":note}]}}));}let tx=tx.clone();let url=url.to_owned();let token=turn_cancel.clone();tokio::spawn(async move {let audio=wav(&audio,input_rate);let result=tokio::select!{_ = token.cancelled()=>return, result=media::completion(&url,&audio)=>result.unwrap_or_default()};let _=tx.send(AsyncEvent::Transcription(uid,result));});}
+                        if is_audio {let audio=std::mem::take(&mut heard);up!(json!({"type":"input_audio_buffer.commit"}));if !note.is_empty(){up!(json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":note}]}}));}let tx=tx.clone();let url=url.to_owned();let token=turn_cancel.clone();tokio::spawn(async move {let audio=media::pcm16_wav(&audio,input_rate);let result=tokio::select!{_ = token.cancelled()=>return, result=media::completion(&url,&audio)=>result.unwrap_or_default()};let _=tx.send(AsyncEvent::Transcription(uid,result));});}
                         else {let message=if note.is_empty(){spoken}else{format!("{spoken}\n\n{note}")};up!(json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":message}]}}));}
                         up!(json!({"type":"response.create"}));responding=true;send(&mut socket,json!({"type":"state","state":"thinking"})).await;
                     },_=>{}
@@ -342,10 +354,10 @@ async fn run(app: App, mut socket: WebSocket) {
             }},
             event=upstream.next()=>{let raw=match event {Some(Ok(UpMessage::Text(raw)))=>raw,Some(Ok(UpMessage::Close(_))) | None | Some(Err(_))=>break,Some(Ok(_))=>continue};let Ok(event)=serde_json::from_str::<Value>(&raw) else{continue};match event["type"].as_str().unwrap_or(""){
                 "session.created"=>{input_rate=event.pointer("/session/audio/input/format/rate").and_then(Value::as_u64).unwrap_or(16000).clamp(8000,96000) as u32;output_rate=event.pointer("/session/audio/output/format/rate").and_then(Value::as_u64).unwrap_or(24000).clamp(8000,96000) as u32;up!(json!({"type":"session.update","session":{"instructions":instructions,"tools":schema(app.backends.running("browser")),"tool_choice":"auto","output_modalities":["text","audio"],"max_output_tokens":400}}));send(&mut socket,json!({"type":"ready","inputRate":input_rate,"outputRate":output_rate,"chatId":chat})).await;send(&mut socket,json!({"type":"state","state":"listening"})).await;},
-                "response.output_text.delta"=>{if discarding {continue;}if let Some(id)=reply.as_deref(){text.push_str(event["delta"].as_str().unwrap_or(""));let _=edit(&app,&chat,|c|{if let Some(m)=c["messages"].as_array_mut().and_then(|v|v.iter_mut().find(|m|m["id"]==id)){m["content"]=json!(text);}});send(&mut socket,json!({"type":"assistant","text":text})).await;}},
+                "response.output_text.delta"=>{if discarding {continue;}if let Some(id)=reply.as_deref(){text.push_str(event["delta"].as_str().unwrap_or(""));stream(&app,&chat,id,&text);send(&mut socket,json!({"type":"assistant","text":text})).await;}},
                 "response.output_audio.delta"=>{if discarding {continue;}if reply.is_some(){if let Ok(bytes)=BASE64.decode(event["delta"].as_str().unwrap_or("")){audio_bytes+=bytes.len();if audio_bytes>output_rate as usize*2*45{up!(json!({"type":"response.cancel"}));}else{if audio_bytes==bytes.len(){send(&mut socket,json!({"type":"state","state":"speaking"})).await;}if socket.send(Message::Binary(bytes.into())).await.is_err(){break;}}}}},
                 "response.function_call_arguments.done"=>{if !discarding {calls.push(event);}},
-                "response.done"=>{responding=false;if discarding {discarding=false;calls.clear();if queued_response {queued_response=false;up!(json!({"type":"response.create"}));responding=true;}continue;}if event["response"]["status"]=="cancelled"{calls.clear();if let Some(id)=reply.take(){finish(&app,&chat,&id,"stopped");send(&mut socket,json!({"type":"turn.done"})).await;}}else if calls.is_empty(){if let Some(id)=reply.take(){finish(&app,&chat,&id,"done");send(&mut socket,json!({"type":"turn.done"})).await;}}else if let Some(id)=reply.clone(){let pending=std::mem::take(&mut calls);let tx=tx.clone();let app=app.clone();let chat=chat.clone();let request=user.clone();let token=turn_cancel.clone();let note=text.clone();send(&mut socket,json!({"type":"state","state":"working"})).await;tokio::spawn(async move{let mut output=Vec::new();for call in pending{if token.is_cancelled(){return;}let name=call["name"].as_str().unwrap_or("");let args:Value=serde_json::from_str(call["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));let result=if tools::descriptors(app.backends.running("browser"), app.backends.running("omni")).get(name).is_some(){agent_tools::run(&app,&chat,&id,&json!({"name":name,"args":args}),&note,&request,"omni",&token).await.unwrap_or_else(|e|format!("error: {e}"))}else{"Unknown tool.".into()};output.push((call["call_id"].as_str().unwrap_or("").to_owned(),result));}let _=tx.send(AsyncEvent::Tools(id,output));});}},
+                "response.done"=>{responding=false;if discarding {discarding=false;calls.clear();if queued_response {queued_response=false;up!(json!({"type":"response.create"}));responding=true;}continue;}if event["response"]["status"]=="cancelled"{calls.clear();if let Some(id)=reply.take(){finish(&app,&chat,&id,"stopped",&text);send(&mut socket,json!({"type":"turn.done"})).await;}}else if calls.is_empty(){if let Some(id)=reply.take(){finish(&app,&chat,&id,"done",&text);send(&mut socket,json!({"type":"turn.done"})).await;}}else if let Some(id)=reply.clone(){let pending=std::mem::take(&mut calls);let tx=tx.clone();let app=app.clone();let chat=chat.clone();let request=user.clone();let token=turn_cancel.clone();let note=text.clone();send(&mut socket,json!({"type":"state","state":"working"})).await;tokio::spawn(async move{let mut output=Vec::new();for call in pending{if token.is_cancelled(){return;}let name=call["name"].as_str().unwrap_or("");let args:Value=serde_json::from_str(call["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));let result=if tools::descriptors(app.backends.running("browser"), app.backends.running("omni")).get(name).is_some(){agent_tools::run(&app,&chat,&id,&json!({"name":name,"args":args}),&note,&request,"omni",&token).await.unwrap_or_else(|e|format!("error: {e}"))}else{"Unknown tool.".into()};output.push((call["call_id"].as_str().unwrap_or("").to_owned(),result));}let _=tx.send(AsyncEvent::Tools(id,output));});}},
                 "error"=>{send(&mut socket,json!({"type":"error","message":event["error"]["message"].as_str().unwrap_or("Voice error.")})).await;},_=>{}
             }},
             event=rx.recv()=>{match event {
@@ -353,13 +365,13 @@ async fn run(app: App, mut socket: WebSocket) {
                 Some(AsyncEvent::Tools(id,outputs))=>{if reply.as_ref()!=Some(&id) || turn_cancel.is_cancelled(){continue;}for (call_id,output) in outputs {up!(json!({"type":"conversation.item.create","item":{"type":"function_call_output","call_id":call_id,"output":output}}));}up!(json!({"type":"response.create"}));responding=true;send(&mut socket,json!({"type":"state","state":"thinking"})).await;},
                 Some(AsyncEvent::Camera(seq,description))=>{if !description.is_empty(){seen=(seq,description);}camera_busy=false;if let Some(frame)=queued_frame.take(){camera_busy=true;let tx=tx.clone();let url=url.to_owned();tokio::spawn(async move{let _=tx.send(AsyncEvent::Camera(frame.0,describe(url,frame.1).await.unwrap_or_default()));});}},None=>break
             }},
-            event=events.recv()=>{if let Ok(event)=event{if let Ok(value)=serde_json::from_str::<Value>(&event){if value["type"]=="chat" && value["chat"]["id"]==chat {if let Some(id)=reply.as_deref(){if let Some(step)=value["chat"]["messages"].as_array().and_then(|v|v.iter().find(|m|m["id"]==id)).and_then(|m|m["steps"].as_array()).and_then(|v|v.last()){send(&mut socket,json!({"type":"tool","label":step["label"],"status":step["status"]})).await;}}}}}}
+            event=events.recv()=>{if let Ok(event)=event{if let Some(value)=Some(&event).filter(|e|e.contains(r#""type":"chat""#)).and_then(|e|serde_json::from_str::<Value>(e).ok()){if value["type"]=="chat" && value["chat"]["id"]==chat {if let Some(id)=reply.as_deref(){if let Some(step)=value["chat"]["messages"].as_array().and_then(|v|v.iter().find(|m|m["id"]==id)).and_then(|m|m["steps"].as_array()).and_then(|v|v.last()){send(&mut socket,json!({"type":"tool","label":step["label"],"status":step["status"]})).await;}}}}}}
         }
     }
     session_cancel.cancel();
     turn_cancel.cancel();
     if let Some(id) = reply {
-        finish(&app, &chat, &id, "stopped");
+        finish(&app, &chat, &id, "stopped", &text);
     }
     let _ = upstream.close(None).await;
     let active = {
@@ -376,7 +388,7 @@ async fn run(app: App, mut socket: WebSocket) {
     }) {
         let mut next = chats.clone();
         next.retain(|c| c["id"] != chat);
-        if store::save(&app.data, "chats.json", &json!(next)).is_ok() {
+        if store::save_array(&app.data, "chats.json", &next).is_ok() {
             *chats = next;
             app.emit(json!({"type":"chat.deleted","id":chat}));
         }

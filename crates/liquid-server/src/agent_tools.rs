@@ -47,7 +47,7 @@ fn edit_step(
     }
     chat["updatedAt"] = json!(now());
     let event = chat.clone();
-    store::save(&app.data, "chats.json", &json!(next))?;
+    store::save_array(&app.data, "chats.json", &next)?;
     *chats = next;
     drop(chats);
     app.emit(json!({"type":"chat","chat":event}));
