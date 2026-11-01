@@ -116,11 +116,15 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     };
     ws.onmessage = async (event) => {
       if (event.data instanceof ArrayBuffer) {
+        if (streaming) return;
         s.player?.push(event.data);
         return;
       }
       const msg = JSON.parse(event.data);
       switch (msg.type) {
+        case "audio.clear":
+          s.player?.flush();
+          break;
         case "ready": {
           setSessionChat(msg.chatId);
           if (msg.chatId !== chatId) history.replaceState(null, "", `#/voice/${msg.chatId}`);
