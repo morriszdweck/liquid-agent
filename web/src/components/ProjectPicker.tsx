@@ -1,5 +1,6 @@
-// "Choose project" in the message box's bottom row: ties the chat to one folder, and the
-// agent then works only inside it. Uses the system's folder picker, or a simple
+// "Choose project" in the chin under the message box of a new chat: ties the chat to
+// one folder, and the agent then works only inside it. Once the chat starts, its
+// project is set and the chin goes away. Uses the system's folder picker, or a simple
 // folder browser when there isn't one (Linux without zenity or kdialog).
 
 import { useEffect, useState } from "react";
@@ -71,7 +72,7 @@ export function ProjectPicker({ chat }: { chat?: Chat }) {
   const label = project ? baseName(project) : "Choose project";
 
   return (
-    <div className="project-pick">
+    <div className="composer-tray">
       <Menu
         side="top"
         width={300}
