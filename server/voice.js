@@ -139,7 +139,7 @@ export function handleVoice(client) {
         up({
           type: "session.update",
           session: {
-            instructions: voiceInstructions(chat.messages.filter((m) => m.content)),
+            instructions: voiceInstructions(chat.messages.filter((m) => m.content), chat.project),
             tools: activeTools().map(schema),
             tool_choice: "auto",
             output_modalities: ["text", "audio"],
@@ -207,7 +207,7 @@ export function handleVoice(client) {
       if (!tool) {
         output = `Unknown tool ${call.name}.`;
       } else {
-        const s = { id: agent.uid(), tool: call.name, args, label: tool.label(args), note: reply.content.trim(), status: "pending", at: Date.now() };
+        const s = { id: agent.uid(), tool: call.name, args, label: tool.label(args, chat.project), note: reply.content.trim(), status: "pending", at: Date.now() };
         reply.content = "";
         reply.steps.push(s);
         agent.emitChat(chat);
@@ -221,7 +221,7 @@ export function handleVoice(client) {
         } else {
           s.status = "running";
           agent.emitChat(chat);
-          const result = await runTool(s.tool, args, { signal: controller.signal, chatId: chat.id });
+          const result = await runTool(s.tool, args, { signal: controller.signal, chatId: chat.id, project: chat.project });
           Object.assign(s, { status: result.ok ? "done" : "error", result: result.text, ms: Date.now() - s.at });
           agent.record(chat, s, result.ok);
           output = result.text;

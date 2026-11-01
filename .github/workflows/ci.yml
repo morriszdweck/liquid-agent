@@ -25,6 +25,10 @@ jobs:
       - run: for f in server/*.js scripts/*.mjs; do node --check "$f"; done
       - run: bash -n install.sh && bash -n scripts/start.sh
       - run: npm test
+      - name: Project folders keep the agent inside them
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then sudo apt-get update && sudo apt-get install -y bubblewrap; fi
+          node scripts/project-check.mjs --need-sandbox
       - run: node scripts/bundle.mjs --build 1 && tar -tzf release/liquid-agent.tar.gz liquid-agent/build.json liquid-agent/node_modules/ws/package.json
 
   bundle:

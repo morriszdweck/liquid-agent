@@ -9,6 +9,7 @@ import { complete, stream } from "./llm.js";
 import { memory } from "./memory.js";
 import { buildWire, systemPrompt } from "./prompt.js";
 import { parseToolCall, visibleText } from "./toolparser.js";
+import { projectFolder, remember as rememberProject } from "./project.js";
 import { activeTools, runTool, toolMap } from "./tools.js";
 import { uploads } from "./uploads.js";
 
@@ -81,16 +82,27 @@ export const agent = {
     return chats.find((c) => c.id === id) ?? null;
   },
 
-  create({ title = "New chat", source } = {}) {
+  create({ title = "New chat", source, project } = {}) {
     const chat = { id: uid(), title, createdAt: Date.now(), updatedAt: Date.now(), pinned: false, source, messages: [] };
+    if (project) {
+      chat.project = projectFolder(project);
+      rememberProject(chat.project);
+    }
     chats.unshift(chat);
     emitChat(chat);
     return chat;
   },
 
-  update(id, { title, pinned }) {
+  update(id, { title, pinned, project }) {
     const chat = this.chat(id);
     if (!chat) return null;
+    // null leaves the project; a path moves the chat into that folder.
+    if (project === null) delete chat.project;
+    else if (project !== undefined) {
+      if (running.has(id)) throw new Error("Wait for the reply to finish before changing the project.");
+      chat.project = projectFolder(project);
+      rememberProject(chat.project);
+    }
     if (typeof title === "string" && title.trim()) Object.assign(chat, { title: title.trim().slice(0, 80), named: true });
     if (typeof pinned === "boolean") chat.pinned = pinned;
     emitChat(chat);
@@ -112,8 +124,9 @@ export const agent = {
   },
 
   /** Adds the user's message and starts the reply in the background. */
-  send(chatId, { text = "", attachments = [] }) {
-    const chat = (chatId && this.chat(chatId)) || this.create();
+  send(chatId, { text = "", attachments = [], project }) {
+    if (!chatId && project) projectFolder(project); // check before creating anything
+    const chat = (chatId && this.chat(chatId)) || this.create({ project });
     if (running.has(chat.id)) throw new Error("I'm still working on the last message.");
     const files = attachments.map((id) => uploads.public(id)).filter(Boolean);
     if (!String(text).trim() && !files.length) throw new Error("Type a message first.");
@@ -202,7 +215,7 @@ export const agent = {
         const context = backends.contextTokens(route.id);
         const budget = Math.min(settings.contextBudget, Math.floor(context / 2));
         const wire = buildWire(chat.messages, {
-          system: systemPrompt({ tools, omni: route.id === "omni", query: request.content }),
+          system: systemPrompt({ tools, omni: route.id === "omni", query: request.content, project: chat.project }),
           omni: route.id === "omni",
           budget,
         });
@@ -270,7 +283,7 @@ export const agent = {
           break;
         }
         const tool = toolMap.get(call.name);
-        const s = { id: uid(), tool: call.name, args: call.args, label: tool.label(call.args), note: text, status: "pending", at: Date.now() };
+        const s = { id: uid(), tool: call.name, args: call.args, label: tool.label(call.args, chat.project), note: text, status: "pending", at: Date.now() };
         reply.steps.push(s);
         emitChat(chat);
 
@@ -291,7 +304,7 @@ export const agent = {
         }
         s.status = "running";
         emitChat(chat);
-        const result = await runTool(s.tool, s.args, { signal, chatId: chat.id });
+        const result = await runTool(s.tool, s.args, { signal, chatId: chat.id, project: chat.project });
         Object.assign(s, { status: result.ok ? "done" : "error", result: result.text, ms: Date.now() - s.at });
         this.record(chat, s, result.ok);
         emitChat(chat);

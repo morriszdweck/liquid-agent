@@ -13,6 +13,7 @@ import { agent } from "./agent.js";
 import { memory } from "./memory.js";
 import { routineStore } from "./routines.js";
 import { cancelReminder, reminderList } from "./tools.js";
+import { forget as forgetProject, listFolders, pickFolder, projectFolder, recentProjects, sandboxKind } from "./project.js";
 import { MAX_UPLOAD, uploads } from "./uploads.js";
 import { speak, transcribe } from "./omni.js";
 import { handleVoice } from "./voice.js";
@@ -135,10 +136,19 @@ route("POST", "/api/update/check", () => updater.check());
 route("POST", "/api/update/apply", () => updater.apply());
 
 route("POST", "/api/chats", async (req) => {
-  const { text, attachments } = await json(req);
-  if (text || attachments?.length) return agent.send(null, { text, attachments });
-  return agent.create();
+  const { text, attachments, project } = (await json(req)) ?? {};
+  if (text || attachments?.length) return agent.send(null, { text, attachments, project });
+  return agent.create({ project });
 });
+route("GET", "/api/projects", () => ({ recent: recentProjects(), sandbox: sandboxKind() }));
+route("POST", "/api/projects/check", async (req) => ({ path: projectFolder((await json(req))?.path) }));
+route("DELETE", "/api/projects", async (req) => forgetProject((await json(req))?.path));
+route("POST", "/api/projects/pick", async () => {
+  const picked = await pickFolder();
+  if (picked === undefined) return { noPicker: true };
+  return { path: picked && projectFolder(picked) };
+});
+route("GET", "/api/folders", (req) => listFolders(new URL(req.url, "http://x").searchParams.get("path")));
 route("PATCH", "/api/chats/([\\w-]+)", async (req, [id]) => agent.update(id, await json(req)) ?? notFound());
 route("DELETE", "/api/chats/([\\w-]+)", (_, [id]) => agent.remove(id));
 route("DELETE", "/api/chats", () => agent.removeAll());

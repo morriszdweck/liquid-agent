@@ -42,6 +42,8 @@ export type Chat = {
   pinned: boolean;
   named?: boolean;
   source?: "voice" | "routine";
+  /** The folder the agent is limited to in this chat. */
+  project?: string;
   messages: Message[];
 };
 

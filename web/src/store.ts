@@ -38,6 +38,8 @@ type State = {
   sidebarOpen: boolean;
   toasts: Toast[];
   speaking: string | null;
+  /** The project folder picked for the next new chat. */
+  draftProject: string | null;
 };
 
 export const useStore = create<State>(() => ({
@@ -64,6 +66,7 @@ export const useStore = create<State>(() => ({
   sidebarOpen: false,
   toasts: [],
   speaking: null,
+  draftProject: null,
 }));
 
 const set = useStore.setState;

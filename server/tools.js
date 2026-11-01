@@ -15,6 +15,7 @@ import { backends } from "./backends.js";
 import { memory } from "./memory.js";
 import { look, transcribe } from "./omni.js";
 import { notify, openApp, openPath, pictureForModel, readClipboard, screenshot, toWav, writeClipboard } from "./platform.js";
+import { guard, reachesOut, sandboxed } from "./project.js";
 
 const HOME = os.homedir();
 const UA =
@@ -30,11 +31,25 @@ const short = (s, n = 60) => {
 
 const home = (f) => (f === "~" || f.startsWith("~/") ? path.join(HOME, f.slice(1)) : f);
 
-/** Resolves ~ and paths relative to the workspace folder. */
-export function expand(file) {
-  const base = home(settings.workspace || HOME);
+/** Resolves ~ and paths relative to the project folder, or the workspace folder without one. */
+export function expand(file, project) {
+  const base = project || home(settings.workspace || HOME);
   const f = String(file ?? "").trim();
   return f ? path.resolve(base, home(f)) : base;
+}
+
+/** Resolves a path for a tool and refuses it when it's outside the chat's project. */
+const at = (file, ctx) => guard(ctx?.project, expand(file, ctx?.project));
+
+function runShell(command, ctx) {
+  const root = ctx.project;
+  if (!root) return shell(command, { cwd: expand(settings.workspace), signal: ctx.signal });
+  const sandbox = sandboxed(root, SHELL, command);
+  if (!sandbox) {
+    const out = reachesOut(root, command);
+    if (out) throw new Error(`${out} is outside the project folder (${tilde(root)}). I can only work inside it.`);
+  }
+  return shell(command, { cwd: root, signal: ctx.signal, sandbox });
 }
 
 const tilde = (f) => (f.startsWith(HOME) ? "~" + f.slice(HOME.length) : f);
@@ -162,7 +177,7 @@ export const TOOLS = [
     params: [p("command", "the command")],
     kind: "write",
     label: (a) => `Ran \`${short(a.command, 80)}\``,
-    run: (a, ctx) => shell(String(a.command ?? ""), { cwd: expand(settings.workspace), signal: ctx.signal }),
+    run: (a, ctx) => runShell(String(a.command ?? ""), ctx),
   },
   {
     name: "read_file",
@@ -170,9 +185,9 @@ export const TOOLS = [
     params: [p("path", "file path")],
     kind: "read",
     limit: 3,
-    label: (a) => `Read ${tilde(expand(a.path))}`,
-    run(a) {
-      const file = expand(a.path);
+    label: (a, project) => `Read ${tilde(expand(a.path, project))}`,
+    run(a, ctx) {
+      const file = at(a.path, ctx);
       const stat = fs.statSync(file);
       if (stat.isDirectory()) return `${tilde(file)} is a folder. Use list_dir.`;
       if (stat.size > 2_000_000) return `${tilde(file)} is too big to read (${Math.round(stat.size / 1e6)} MB).`;
@@ -186,9 +201,9 @@ export const TOOLS = [
     desc: "create or overwrite a text file",
     params: [p("path", "file path"), p("content", "full file content")],
     kind: "write",
-    label: (a) => `Wrote ${tilde(expand(a.path))}`,
-    run(a) {
-      const file = expand(a.path);
+    label: (a, project) => `Wrote ${tilde(expand(a.path, project))}`,
+    run(a, ctx) {
+      const file = at(a.path, ctx);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, String(a.content ?? ""));
       return `Saved ${tilde(file)} (${Buffer.byteLength(String(a.content ?? ""))} bytes).`;
@@ -199,9 +214,9 @@ export const TOOLS = [
     desc: "list a folder",
     params: [p("path", "folder path", { required: false })],
     kind: "read",
-    label: (a) => `Listed ${tilde(expand(a.path))}`,
-    run(a) {
-      const dir = expand(a.path);
+    label: (a, project) => `Listed ${tilde(expand(a.path, project))}`,
+    run(a, ctx) {
+      const dir = at(a.path, ctx);
       const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => !e.name.startsWith("."));
       const lines = entries.slice(0, 120).map((e) => (e.isDirectory() ? `${e.name}/` : e.name));
       if (entries.length > 120) lines.push(`…and ${entries.length - 120} more`);
@@ -214,12 +229,12 @@ export const TOOLS = [
     params: [p("target", "app name, path or URL")],
     kind: "write",
     label: (a) => `Opened ${short(a.target)}`,
-    async run(a) {
+    async run(a, ctx) {
       const target = String(a.target ?? "").trim();
       if (/^https?:\/\//i.test(target) || /^[\w-]+(\.[\w-]+)+(\/|$)/.test(target)) {
         await openPath(publicURL(target));
-      } else if (fs.existsSync(expand(target))) {
-        await openPath(expand(target));
+      } else if (fs.existsSync(expand(target, ctx.project)) || (ctx.project && /[/~]/.test(target))) {
+        await openPath(at(target, ctx));
       } else {
         await openApp(target);
       }
@@ -323,7 +338,7 @@ export const TOOLS = [
     available: omniRunning,
     label: (a) => `Looked at ${path.basename(String(a.path ?? ""))}`,
     async run(a, ctx) {
-      const file = expand(a.path);
+      const file = at(a.path, ctx);
       const tmp = path.join(DIRS.uploads, `look-${crypto.randomUUID()}.jpg`);
       try {
         const picture = await pictureForModel(file, tmp);
@@ -344,7 +359,7 @@ export const TOOLS = [
     async run(a, ctx) {
       const tmp = path.join(DIRS.uploads, `hear-${crypto.randomUUID()}.wav`);
       try {
-        await toWav(expand(a.path), tmp);
+        await toWav(at(a.path, ctx), tmp);
         return await transcribe(fs.readFileSync(tmp), ctx);
       } finally {
         fs.rmSync(tmp, { force: true });

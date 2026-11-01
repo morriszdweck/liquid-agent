@@ -26,7 +26,7 @@ function persona() {
   return `${PERSONALITIES[settings.personality] ?? ""}${name}`;
 }
 
-export function systemPrompt({ tools, omni, query }) {
+export function systemPrompt({ tools, omni, query, project }) {
   const style = "Use Markdown when it helps: headings, lists, tables, fenced code blocks with a language, and $...$ or $$...$$ for math.";
   const toolLines = tools.length
     ? [
@@ -42,7 +42,9 @@ export function systemPrompt({ tools, omni, query }) {
     style,
     ...toolLines,
     omni && "You can see and hear attachments.",
-    `Now: ${now()}. Workspace: ${tilde(settings.workspace)}`,
+    project
+      ? `Now: ${now()}. Project folder: ${tilde(project)}. You can only read, write and run commands inside this folder; relative paths start there.`
+      : `Now: ${now()}. Workspace: ${tilde(settings.workspace)}`,
     memory.promptBlock(query),
   ]
     .filter(Boolean)
@@ -50,7 +52,7 @@ export function systemPrompt({ tools, omni, query }) {
 }
 
 /** Instructions for Omni's realtime voice session. Spoken replies must stay short and plain. */
-export function voiceInstructions(history = []) {
+export function voiceInstructions(history = [], project) {
   const recent = history
     .slice(-6)
     .map((m) => `${m.role === "user" ? "User" : "You"}: ${String(m.content).replace(/\s+/g, " ").slice(0, 200)}`)
@@ -61,6 +63,7 @@ export function voiceInstructions(history = []) {
     `When the user asks you to do something on the ${DEVICE}, with files, reminders or memory, call a tool, then say the result in a few words. For news, weather, prices or facts you aren't sure of, use web_search first.`,
     "When the user's camera is on, their message ends with a note like (On camera right now: ...). That is what you can see through the camera: use it when it helps, and don't read the note out.",
     `Now: ${now()}.`,
+    project && `Project folder: ${tilde(project)}. You can only work with files inside it.`,
     memory.promptBlock(recent),
     recent && `Earlier in this chat:\n${recent}`,
   ]

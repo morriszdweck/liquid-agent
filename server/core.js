@@ -222,9 +222,12 @@ export const SHELL = (() => {
 })();
 
 /** Shell command for the shell tool. Never throws: failures come back as text the model can read. */
-export function shell(command, { cwd, timeout = 60_000, signal } = {}) {
+export function shell(command, { cwd, timeout = 60_000, signal, sandbox } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(SHELL, [path.basename(SHELL) === "sh" ? "-c" : "-lc", command], { cwd, signal });
+    // sandbox: { cmd, args } that already wrap the shell and the command.
+    const child = sandbox
+      ? spawn(sandbox.cmd, sandbox.args, { cwd, signal })
+      : spawn(SHELL, [path.basename(SHELL) === "sh" ? "-c" : "-lc", command], { cwd, signal });
     let out = "";
     const add = (d) => {
       if (out.length < MAX_OUTPUT) out += d;

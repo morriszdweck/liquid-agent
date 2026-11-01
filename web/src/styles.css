@@ -1724,6 +1724,131 @@ input[type="range"] {
 .composer textarea::placeholder {
   color: var(--fg-3);
 }
+/* The project tray tucked under the message box */
+.composer {
+  position: relative;
+  z-index: 1;
+}
+.composer-tray {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: -24px 26px 0;
+  padding: 30px 10px 6px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 22px 22px;
+  background: var(--panel);
+}
+.tray-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 340px;
+  height: 32px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: 16px;
+  background: none;
+  color: var(--fg-2);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.tray-btn > svg {
+  flex: none;
+}
+.tray-btn > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tray-btn:hover,
+.tray-btn.active {
+  background: var(--hover-strong);
+  color: var(--fg);
+}
+.tray-btn.on {
+  color: var(--accent-text);
+}
+.tray-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.tray-x {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.tray-x:hover {
+  background: var(--hover-strong);
+  color: var(--fg);
+}
+@media (max-width: 560px) {
+  .composer-tray {
+    margin: -24px 14px 0;
+  }
+}
+.folder-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.folder-path input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px var(--mono);
+}
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px;
+}
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.folder-row:hover {
+  background: var(--hover);
+}
+.folder-row > svg {
+  flex: none;
+  color: var(--fg-3);
+}
+.folder-empty {
+  padding: 18px;
+  color: var(--fg-3);
+  text-align: center;
+  font-size: 13.5px;
+}
 .composer-row {
   display: flex;
   align-items: center;

@@ -23,6 +23,7 @@ import { Mic as Microphone, wav } from "../audio/capture";
 import { errorToast, go, part, toast, useStore } from "../store";
 import type { ApprovalMode, Attachment, Chat, Part } from "../types";
 import { DEVICE, captureScreen, cx, prepareImage } from "../util";
+import { ProjectPicker } from "./ProjectPicker";
 import { Menu, Spinner } from "./ui";
 
 type Pending = { key: string; name: string; kind: Attachment["kind"]; preview?: string; uploaded?: Attachment; failed?: boolean };
@@ -189,7 +190,9 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
     try {
       if (chat) await api("POST", `/api/chats/${chat.id}/send`, body);
       else {
-        const created = await api<Chat>("POST", "/api/chats", body);
+        const project = useStore.getState().draftProject;
+        const created = await api<Chat>("POST", "/api/chats", { ...body, project: project ?? undefined });
+        useStore.setState({ draftProject: null });
         go(`#/chat/${created.id}`);
       }
       keepDraft("");
@@ -408,6 +411,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
           </div>
         )}
       </div>
+      <ProjectPicker chat={chat} />
     </div>
   );
 }
