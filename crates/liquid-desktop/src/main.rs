@@ -216,23 +216,20 @@ fn open(proxy: EventLoopProxy<Ui>) {
         return;
     }
     if !server_binary().exists() {
-        say("Setting up Liquid Agent. This takes a minute the first time.");
+        say("@settingUp");
         if let Err(e) = install(&proxy) {
             return fail(e.to_string());
         }
     }
     if !running() {
-        say("Starting Liquid Agent…");
+        say("@starting");
         if let Err(e) = start_server() {
             return fail(e.to_string());
         }
     }
     if !wait_until_running(Duration::from_secs(60)) {
         let log = data_dir().join("logs").join("server.log");
-        return fail(format!(
-            "Liquid Agent didn't start. Its log is in {}.",
-            log.display()
-        ));
+        return fail(format!("@notStarted:{}", log.display()));
     }
     let _ = proxy.send_event(Ui::Show(origin()));
 }

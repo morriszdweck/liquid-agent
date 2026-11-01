@@ -21,6 +21,7 @@ import { errorToast, go, part, useStore } from "../store";
 import type { Chat } from "../types";
 import { IS_MAC, chatMarkdown, cx, download, groupChats } from "../util";
 import { IconButton, Menu, Spinner, StatusDot } from "./ui";
+import { t } from "../i18n";
 
 export function Logo({ size = 22 }: { size?: number }) {
   return <img src="/icon.svg" width={size} height={size} alt="" className="logo" />;
@@ -41,11 +42,11 @@ export function Sidebar() {
   }, [chats, query]);
 
   const nav = [
-    { page: "voice", label: "Voice chat", icon: <AudioLines size={17} />, hash: "#/voice" },
-    { page: "foryou", label: "For You", icon: <Sparkles size={17} />, hash: "#/foryou" },
-    { page: "routines", label: "Routines", icon: <Repeat size={17} />, hash: "#/routines" },
-    { page: "memory", label: "Memory", icon: <Brain size={17} />, hash: "#/memory" },
-    { page: "activity", label: "Activity", icon: <History size={17} />, hash: "#/activity" },
+    { page: "voice", label: t("sidebar.voiceChat"), icon: <AudioLines size={17} />, hash: "#/voice" },
+    { page: "foryou", label: t("sidebar.forYou"), icon: <Sparkles size={17} />, hash: "#/foryou" },
+    { page: "routines", label: t("sidebar.routines"), icon: <Repeat size={17} />, hash: "#/routines" },
+    { page: "memory", label: t("sidebar.memory"), icon: <Brain size={17} />, hash: "#/memory" },
+    { page: "activity", label: t("sidebar.activity"), icon: <History size={17} />, hash: "#/activity" },
   ];
 
   const small = part(parts, "small");
@@ -54,12 +55,17 @@ export function Sidebar() {
   const starting = [small, omni].some((p) => p?.status === "starting" || p?.status === "installing");
   const fetching = parts.find((p) => p.status === "installing");
   const status = fetching
-    ? { tone: "busy" as const, text: `Downloading ${fetching.title.toLowerCase()}${fetching.fraction ? ` · ${Math.round(fetching.fraction * 100)}%` : "…"}` }
+    ? {
+        tone: "busy" as const,
+        text: fetching.fraction
+          ? t("sidebar.downloadingPercent", { what: fetching.title.toLowerCase(), percent: Math.round(fetching.fraction * 100) })
+          : t("sidebar.downloading", { what: fetching.title.toLowerCase() }),
+      }
     : up.length
-      ? { tone: "ok" as const, text: "Ready" }
+      ? { tone: "ok" as const, text: t("sidebar.ready") }
       : starting
-          ? { tone: "busy" as const, text: "Starting models…" }
-          : { tone: "bad" as const, text: "Set up models" };
+          ? { tone: "busy" as const, text: t("sidebar.starting") }
+          : { tone: "bad" as const, text: t("sidebar.setUp") };
 
   return (
     <>
@@ -70,7 +76,7 @@ export function Sidebar() {
             <Logo />
             <span>Liquid Agent</span>
           </div>
-          <IconButton label="Close sidebar" className="mobile-only" onClick={() => useStore.setState({ sidebarOpen: false })}>
+          <IconButton label={t("sidebar.close")} className="mobile-only" onClick={() => useStore.setState({ sidebarOpen: false })}>
             <X size={18} />
           </IconButton>
         </div>
@@ -78,7 +84,7 @@ export function Sidebar() {
         <nav className="nav">
           <button className={cx("nav-row", route.page === "chat" && !activeId && "active")} onClick={() => go("#/")}>
             <SquarePen size={17} />
-            <span>New chat</span>
+            <span>{t("sidebar.newChat")}</span>
             <kbd>{IS_MAC ? "⌘⇧O" : "Ctrl+Shift+O"}</kbd>
           </button>
           {nav.map((n) => (
@@ -91,16 +97,16 @@ export function Sidebar() {
 
         <div className="search">
           <Search size={15} />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search chats" aria-label="Search chats" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("sidebar.search")} aria-label={t("sidebar.search")} />
           {query && (
-            <button className="search-clear" onClick={() => setQuery("")} aria-label="Clear search">
+            <button className="search-clear" onClick={() => setQuery("")} aria-label={t("sidebar.clearSearch")}>
               <X size={13} />
             </button>
           )}
         </div>
 
         <div className="recents">
-          {groups.length === 0 && <div className="recents-empty">{query ? "No chats match." : "Your chats will show up here."}</div>}
+          {groups.length === 0 && <div className="recents-empty">{query ? t("sidebar.noMatches") : t("sidebar.empty")}</div>}
           {groups.map(([label, list]) => (
             <div key={label} className="recents-group">
               <div className="recents-label">{label}</div>
@@ -117,8 +123,8 @@ export function Sidebar() {
             <span>{status.text}</span>
           </button>
           <button className="profile" onClick={() => useStore.setState({ settingsOpen: "general" })}>
-            <span className="avatar">{(settings?.userName || "You").slice(0, 1).toUpperCase()}</span>
-            <span className="profile-name">{settings?.userName || "Settings"}</span>
+            <span className="avatar">{(settings?.userName || t("common.you")).slice(0, 1).toUpperCase()}</span>
+            <span className="profile-name">{settings?.userName || t("sidebar.settings")}</span>
             <SettingsIcon size={16} />
           </button>
         </div>
@@ -146,7 +152,7 @@ function ChatRow({
     if (title.trim() && title !== chat.title) api("PATCH", `/api/chats/${chat.id}`, { title }).catch(errorToast);
   };
   const remove = async () => {
-    if (!confirm(`Delete “${chat.title}”? This can't be undone.`)) return;
+    if (!confirm(t("chat.deleteConfirm", { title: chat.title }))) return;
     await api("DELETE", `/api/chats/${chat.id}`).catch(errorToast);
     if (active) go("#/");
   };
@@ -179,13 +185,13 @@ function ChatRow({
       <Menu
         align="right"
         trigger={(open, toggle) => (
-          <button className={cx("chat-row-more", open && "open")} onClick={toggle} aria-label="Chat options">
+          <button className={cx("chat-row-more", open && "open")} onClick={toggle} aria-label={t("sidebar.chatOptions")}>
             <MoreHorizontal size={15} />
           </button>
         )}
         items={[
           {
-            label: "Rename",
+            label: t("common.rename"),
             icon: <Pencil size={15} />,
             onClick: () => {
               setTitle(chat.title);
@@ -193,13 +199,13 @@ function ChatRow({
             },
           },
           {
-            label: chat.pinned ? "Unpin" : "Pin",
+            label: chat.pinned ? t("sidebar.unpin") : t("sidebar.pin"),
             icon: chat.pinned ? <PinOff size={15} /> : <Pin size={15} />,
             onClick: () => api("PATCH", `/api/chats/${chat.id}`, { pinned: !chat.pinned }).catch(errorToast),
           },
-          { label: "Export as Markdown", icon: <Download size={15} />, onClick: () => download(`${chat.title}.md`, chatMarkdown(chat)) },
+          { label: t("sidebar.exportMarkdown"), icon: <Download size={15} />, onClick: () => download(`${chat.title}.md`, chatMarkdown(chat)) },
           "divider",
-          { label: "Delete", icon: <Trash2 size={15} />, danger: true, onClick: remove },
+          { label: t("common.delete"), icon: <Trash2 size={15} />, danger: true, onClick: remove },
         ]}
       />
     </div>

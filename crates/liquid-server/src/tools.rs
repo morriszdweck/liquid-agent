@@ -31,9 +31,21 @@ pub fn descriptors(browser: bool, omni: bool) -> Value {
     }
     value
 }
-pub const PROMPT: &str = "When the request needs files, the computer, or memory, reply with one tool call only:\n<tool_call>\n<function=NAME>\n<parameter=ARG>\nVALUE\n</parameter>\n</function>\n</tool_call>\nTools:\n- shell(command) run a shell command\n- read_file(path) read a text file\n- write_file(path, content) create or overwrite a text file\n- list_dir(path) list a folder\n- remember(fact) save a lasting fact about the user\n- recall(query) search saved facts\n- web_search(query) search the web\n- fetch_url(url) read a public web page\n- reminder(text, minutes) set a reminder\n- open(target) open an app, file or website\n- clipboard() read the clipboard\n- set_clipboard(text) copy text to the clipboard\nAfter a result, answer as soon as you know enough; use another tool only if needed.";
-pub const VISION_PROMPT: &str = "\nMedia tools:\n- look_at_image(path, question) inspect an image\n- look_at_screen(question) inspect the screen\n- transcribe_audio(path) transcribe an audio file";
-pub const BROWSER_PROMPT: &str = "\nBrowser tools:\n- browser_goto(url) open a public web page\n- browser_read() read the current page\n- browser_click(target) click visible text or a selector\n- browser_type(target, text) fill a field";
+/// The tool-call protocol and the tools. Tool names and parameters stay in English: they are what the models answer with.
+pub fn prompt(s: &liquid_core::i18n::Strings) -> String {
+    format!(
+        "{}\n<tool_call>\n<function=NAME>\n<parameter=ARG>\nVALUE\n</parameter>\n</function>\n</tool_call>\n{}\n- shell(command) run a shell command\n- read_file(path) read a text file\n- write_file(path, content) create or overwrite a text file\n- list_dir(path) list a folder\n- remember(fact) save a lasting fact about the user\n- recall(query) search saved facts\n- web_search(query) search the web\n- fetch_url(url) read a public web page\n- reminder(text, minutes) set a reminder\n- open(target) open an app, file or website\n- clipboard() read the clipboard\n- set_clipboard(text) copy text to the clipboard\n{}",
+        s.tools_intro, s.tools_list, s.tools_after
+    )
+}
+/// The picture and audio tools, when the multimodal model is running.
+pub fn vision_prompt(s: &liquid_core::i18n::Strings) -> String {
+    format!("\n{}\n- look_at_image(path, question) inspect an image\n- look_at_screen(question) inspect the screen\n- transcribe_audio(path) transcribe an audio file", s.media_tools)
+}
+/// The browser tools, when the Web helper is running.
+pub fn browser_prompt(s: &liquid_core::i18n::Strings) -> String {
+    format!("\n{}\n- browser_goto(url) open a public web page\n- browser_read() read the current page\n- browser_click(target) click visible text or a selector\n- browser_type(target, text) fill a field", s.browser_tools)
+}
 fn error(status: StatusCode, message: &str) -> Response {
     json_response(status, json!({"error":message}))
 }
@@ -64,40 +76,9 @@ pub async fn approval(app: &App, request: Request, path: &str) -> Response {
         error(StatusCode::NOT_FOUND, "Not found.")
     }
 }
-pub fn label(name: &str, args: &Value) -> String {
-    let short = |key: &str| {
-        args[key]
-            .as_str()
-            .unwrap_or("")
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .chars()
-            .take(80)
-            .collect::<String>()
-    };
-    match name {
-        "shell" => format!("Run `{}`", short("command")),
-        "read_file" => format!("Read {}", short("path")),
-        "write_file" => format!("Write {}", short("path")),
-        "list_dir" => format!("List {}", short("path")),
-        "remember" => format!("Remember “{}”", short("fact")),
-        "recall" => format!("Recall “{}”", short("query")),
-        "open" => format!("Open {}", short("target")),
-        "clipboard" => "Read the clipboard".into(),
-        "look_at_image" => format!("Look at {}", short("path")),
-        "look_at_screen" => "Look at the screen".into(),
-        "transcribe_audio" => format!("Listen to {}", short("path")),
-        "set_clipboard" => "Copy to the clipboard".into(),
-        "reminder" => format!("Set a reminder: {}", short("text")),
-        "web_search" => format!("Search the web for “{}”", short("query")),
-        "fetch_url" => format!("Read {}", short("url")),
-        "browser_goto" => format!("Open {} in the browser", short("url")),
-        "browser_read" => "Read the browser page".into(),
-        "browser_click" => format!("Click “{}”", short("target")),
-        "browser_type" => format!("Type into “{}”", short("target")),
-        _ => "Unknown action".into(),
-    }
+/// The label of a tool call, in the language of the chat.
+pub fn label(strings: &liquid_core::i18n::Strings, name: &str, args: &Value) -> String {
+    liquid_core::i18n::label(strings, name, args)
 }
 pub fn required(name: &str, args: &Value) -> bool {
     let keys: &[&str] = match name {

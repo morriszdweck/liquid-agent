@@ -48,10 +48,20 @@ pub fn run() -> Result<()> {
                         .stderr(Stdio::null())
                         .spawn();
                 } else {
-                    println!("Open {url} in your browser.");
+                    println!(
+                        "{}",
+                        liquid_core::i18n::console_language()
+                            .open_in_browser
+                            .replace("{url}", &url)
+                    );
                 }
             } else {
-                println!("Starting Liquid Agent at http://127.0.0.1:{port}");
+                println!(
+                    "{}",
+                    liquid_core::i18n::console_language()
+                        .starting
+                        .replace("{url}", &format!("http://127.0.0.1:{port}"))
+                );
                 fs::create_dir_all(log.parent().unwrap())?;
                 let output = OpenOptions::new().create(true).append(true).open(&log)?;
                 Command::new(&server)
@@ -79,12 +89,13 @@ pub fn run() -> Result<()> {
                 .collect();
             let pattern = format!("^{} *( |$)", escaped);
             let status = Command::new("pkill").args(["-f", &pattern]).status()?;
+            let text = liquid_core::i18n::console_language();
             println!(
                 "{}",
                 if status.success() {
-                    "Stopped."
+                    text.stopped
                 } else {
-                    "It wasn't running."
+                    text.not_running
                 }
             );
         }
@@ -114,7 +125,7 @@ pub fn run() -> Result<()> {
                 "installation update failed"
             );
         }
-        _ => println!("Use: liquid-agent [open|stop|update|logs]"),
+        _ => println!("{}", liquid_core::i18n::console_language().usage),
     }
     Ok(())
 }

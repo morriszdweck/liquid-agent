@@ -110,6 +110,16 @@ npm run build:setup && scripts/mac-app.sh aarch64-apple-darwin arm64   # on a Ma
 
 Run the server on its own with `LIQUID_AGENT_RUST_HOME=/tmp/liquid-agent-test cargo run -p liquid-server` (port 8170 by default; `LIQUID_AGENT_PORT` changes it). Desktop tests that need a real session run with `cargo test -p liquid-server desktop_check -- --ignored --test-threads=1`.
 
+## Languages
+
+The interface and the models speak English, Español, Português, Français, Deutsch, Italiano, 中文 and 日本語. Settings → General → Language picks one, or follows the browser ("Auto"). With "Auto", the models answer in the language the user writes in.
+
+- **The web UI** is translated in `web/src/i18n/locales/`, one file per language. `en.ts` is the source; every other file must have every key, and `npm run typecheck` fails if one is missing. Missing text falls back to English.
+- **The models' prompts** are in `crates/liquid-core/src/i18n.rs`: the system prompt, the voice instructions, the tool framing, the starter routines, and the words the server shows for each action and approval. Tool names and their arguments stay in English, because they are the protocol the models answer in.
+- **Server messages** (errors shown in the interface) are dictionary entries whose English text matches the server's, in `web/src/i18n/locales/*.ts` under `server.*`.
+
+To add a language: add its code to `CODES` and its table to `crates/liquid-core/src/i18n.rs` (the compiler lists any missing field), add `web/src/i18n/locales/<code>.ts`, and register it in `LOCALES` in `web/src/i18n/index.ts`.
+
 ## License
 
 MIT

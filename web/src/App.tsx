@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { api } from "./api";
 import { stopSpeaking } from "./audio/speak";
 import { ApprovalDock } from "./components/ApprovalDock";
 import { ChatView } from "./components/ChatView";
@@ -9,6 +10,7 @@ import { Logo, Sidebar } from "./components/Sidebar";
 import { Spinner } from "./components/ui";
 import { VoiceView } from "./components/VoiceView";
 import { connect, go, useStore } from "./store";
+import { setLocale, useLocaleCode, useT } from "./i18n";
 
 function useTheme() {
   const theme = useStore((s) => s.settings?.theme ?? "system");
@@ -51,13 +53,22 @@ export function App() {
   useEffect(() => {
     document.title = chat ? `${chat.title} · Liquid Agent` : "Liquid Agent";
   }, [chat?.title]);
+  const language = useStore((s) => s.settings?.language);
+  useEffect(() => setLocale(language), [language]);
+  // The server words its own replies (step labels, approval notes) in this language, so it's told what the UI shows.
+  const locale = useLocaleCode();
+  const uiLanguage = useStore((s) => s.settings?.uiLanguage);
+  useEffect(() => {
+    if (loaded && uiLanguage !== locale) api("PATCH", "/api/settings", { uiLanguage: locale }).catch(() => {});
+  }, [loaded, locale, uiLanguage]);
+  const t = useT();
 
   if (!loaded) {
     return (
       <div className="splash">
         <Logo size={44} />
         <div className="splash-text">
-          <Spinner size={14} /> {connected ? "Loading…" : "Connecting to Liquid Agent…"}
+          <Spinner size={14} /> {connected ? t("app.loading") : t("app.connecting")}
         </div>
         <Toasts />
       </div>

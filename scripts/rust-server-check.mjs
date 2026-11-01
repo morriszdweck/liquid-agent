@@ -164,6 +164,16 @@ try {
   check(finishedChat.id === startedChat.id && finishedChat.messages.at(-1).content === "Hello friend!", "Rust server streams and saves a model reply");
   const modelRequest=JSON.parse(fs.readFileSync(path.join(dir,"model-request.json"),"utf8"));
   check(modelRequest.stream === true && modelRequest.messages.some((m)=>m.role === "user" && m.content === "Say hello"),"Rust server sends chat context to the local model");
+  // The models are told which language to answer in, and the prompt's words follow the language.
+  check(modelRequest.messages.find((m)=>m.role === "system").content.includes("Reply in the same language as the user."),"Auto language tells the model to match the user's language");
+  await api("/api/settings","PATCH",{language:"es"});
+  const spanishDone=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error("Spanish chat did not finish")),15_000); timer.unref(); const onMessage=(data)=>{const event=JSON.parse(data.toString()); if(event.type==="chat" && event.chat.messages?.at(-1)?.status==="done" && event.chat.messages.at(-1).content==="Hello friend!"){clearTimeout(timer); socket.off("message",onMessage); resolve(event.chat);}}; socket.on("message",onMessage);});
+  const spanishChat=await api("/api/chats","POST",{text:"Say hello"});
+  await spanishDone;
+  const spanishSystem=JSON.parse(fs.readFileSync(path.join(dir,"model-request.json"),"utf8")).messages.find((m)=>m.role === "system").content;
+  check(spanishSystem.startsWith("Eres Liquid Agent") && spanishSystem.includes("Responde en Español."),"The models answer in the language the user chose, with prompts in that language");
+  await api("/api/settings","PATCH",{language:"auto"});
+  await api(`/api/chats/${spanishChat.id}`,"DELETE");
   const stopped = new Promise((resolve, reject) => {
     const timer=setTimeout(()=>reject(new Error("chat did not stop")),15_000); timer.unref();
     const onMessage=(data)=>{const event=JSON.parse(data.toString()); if(event.type === "chat" && event.chat.messages?.some((m)=>m.role === "assistant" && m.status === "stopped")) {clearTimeout(timer); socket.off("message",onMessage); resolve(event.chat);} };

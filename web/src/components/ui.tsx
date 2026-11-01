@@ -4,9 +4,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cx } from "../util";
+import { t } from "../i18n";
 
 export function Spinner({ size = 14 }: { size?: number }) {
-  return <span className="spinner" style={{ width: size, height: size }} aria-label="Working" />;
+  return <span className="spinner" style={{ width: size, height: size }} aria-label={t("ui.working")} />;
 }
 
 export function IconButton({
@@ -140,7 +141,7 @@ export function Modal({ title, onClose, children, wide, footer }: { title: React
       <div className={cx("modal", wide && "wide")} role="dialog" aria-modal="true">
         <div className="modal-head">
           <h2>{title}</h2>
-          <IconButton label="Close" onClick={onClose}>
+          <IconButton label={t("ui.close")} onClick={onClose}>
             <X size={18} />
           </IconButton>
         </div>

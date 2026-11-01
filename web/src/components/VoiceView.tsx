@@ -9,7 +9,8 @@ import { Camera, Mic as Microphone, SpeechDetector } from "../audio/capture";
 import { Player } from "../audio/player";
 import { stopSpeaking } from "../audio/speak";
 import { go, part, useStore } from "../store";
-import { DEVICE, cx } from "../util";
+import { cx, deviceName } from "../util";
+import { localizeServerError, t, type Key } from "../i18n";
 import { ApprovalDock } from "./ApprovalDock";
 import { TopBar } from "./Shell";
 import { Empty, Spinner } from "./ui";
@@ -19,15 +20,15 @@ const FRAME_EVERY_MS = 4000;
 
 type Phase = "idle" | "connecting" | "listening" | "hearing" | "thinking" | "speaking" | "working" | "ended";
 
-const PHASE_TEXT: Record<Phase, string> = {
-  idle: "Ready when you are",
-  connecting: "Connecting…",
-  listening: "Listening",
-  hearing: "Listening",
-  thinking: "Thinking",
-  speaking: "Talk any time to interrupt",
-  working: "Working on it",
-  ended: "Call ended",
+const PHASE_KEY: Record<Phase, Key> = {
+  idle: "voice.phase.idle",
+  connecting: "voice.phase.connecting",
+  listening: "voice.phase.listening",
+  hearing: "voice.phase.listening",
+  thinking: "voice.phase.thinking",
+  speaking: "voice.phase.speaking",
+  working: "voice.phase.working",
+  ended: "voice.phase.ended",
 };
 
 export function VoiceView({ chatId }: { chatId?: string }) {
@@ -84,7 +85,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
       await camera.start();
     } catch {
       camera.stop();
-      setError("I can't use the camera. Allow it in your browser's site settings, then try again.");
+      setError(t("voice.cameraBlocked"));
       return;
     }
     if (session.current !== s) return camera.stop();
@@ -155,7 +156,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
           try {
             await s.mic.start();
           } catch {
-            setError("I can't use the microphone. Allow it in your browser's site settings, then try again.");
+            setError(t("voice.micBlocked"));
             end();
             setPhase("ended");
             return;
@@ -181,7 +182,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
           streaming = false;
           break;
         case "error":
-          setError(msg.message);
+          setError(localizeServerError(msg.message));
           break;
       }
     };
@@ -231,15 +232,15 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     const waking = omni?.status === "starting";
     return (
       <div className="page">
-        <TopBar title="Voice chat" />
-        <Empty icon={waking ? <Spinner size={22} /> : <AudioLines size={22} />} title={waking ? "Getting voice ready…" : "Voice chat needs Eyes and ears"}>
+        <TopBar title={t("voice.title")} />
+        <Empty icon={waking ? <Spinner size={22} /> : <AudioLines size={22} />} title={waking ? t("voice.gettingReady") : t("voice.needsEyes")}>
           {waking ? (
-            "This takes a few seconds."
+            t("voice.fewSeconds")
           ) : (
             <>
-              Voice chat listens and talks on your {DEVICE}. Nothing leaves it.
+              {t("voice.listensOn", { device: deviceName() })}
               <button className="btn primary" onClick={() => useStore.setState({ settingsOpen: "downloads" })}>
-                Set it up
+                {t("voice.setUp")}
               </button>
             </>
           )}
@@ -252,16 +253,16 @@ export function VoiceView({ chatId }: { chatId?: string }) {
 
   return (
     <div className="page voice">
-      <TopBar title="Voice chat" right={<span className="pill pill-muted">On this {DEVICE}</span>} />
+      <TopBar title={t("voice.title")} right={<span className="pill pill-muted">{t("voice.onDevice", { device: deviceName() })}</span>} />
       <div className="voice-stage">
-        {video && live && <video ref={preview} className="voice-preview" autoPlay muted playsInline aria-label="Your camera" />}
+        {video && live && <video ref={preview} className="voice-preview" autoPlay muted playsInline aria-label={t("voice.yourCamera")} />}
         <div ref={orb} className={cx("orb", `phase-${phase}`, muted && "muted")}>
           <div className="orb-glow" />
           <div className="orb-core" />
         </div>
         <div className="voice-state">
           {phase === "connecting" && <Spinner size={14} />}
-          {muted && live ? "You're muted" : PHASE_TEXT[phase]}
+          {muted && live ? t("voice.muted") : t(PHASE_KEY[phase])}
         </div>
         {tool && (
           <div className="voice-tool">
@@ -283,11 +284,11 @@ export function VoiceView({ chatId }: { chatId?: string }) {
             <input
               autoFocus
               value={typed}
-              placeholder="Type a message"
+              placeholder={t("voice.typeMessage")}
               onChange={(e) => setTyped(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && sendTyped()}
             />
-            <button className="round-btn primary" onClick={sendTyped} aria-label="Send">
+            <button className="round-btn primary" onClick={sendTyped} aria-label={t("common.send")}>
               <Send size={15} />
             </button>
           </div>
@@ -295,18 +296,18 @@ export function VoiceView({ chatId }: { chatId?: string }) {
         <div className="voice-controls">
           {live ? (
             <>
-              <button className={cx("voice-btn", muted && "on")} onClick={() => setMuted(!muted)} aria-label={muted ? "Unmute" : "Mute"}>
+              <button className={cx("voice-btn", muted && "on")} onClick={() => setMuted(!muted)} aria-label={muted ? t("voice.unmute") : t("voice.mute")}>
                 {muted ? <MicOff size={20} /> : <Mic size={20} />}
               </button>
               <button
                 className={cx("voice-btn", video && "on")}
                 onClick={toggleVideo}
-                aria-label={video ? "Turn camera off" : "Turn camera on"}
-                title={video ? "Turn camera off" : "Turn camera on so it can see what you show it"}
+                aria-label={video ? t("voice.cameraOff") : t("voice.cameraOn")}
+                title={video ? t("voice.cameraOff") : t("voice.cameraHint")}
               >
                 {video ? <Video size={20} /> : <VideoOff size={20} />}
               </button>
-              <button className={cx("voice-btn", typing && "on")} onClick={() => setTyping(!typing)} aria-label="Type instead">
+              <button className={cx("voice-btn", typing && "on")} onClick={() => setTyping(!typing)} aria-label={t("voice.typeInstead")}>
                 <Keyboard size={20} />
               </button>
               <button
@@ -315,7 +316,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
                   end();
                   go(sessionChat && hasTranscript ? `#/chat/${sessionChat}` : "#/");
                 }}
-                aria-label="End voice chat"
+                aria-label={t("voice.endCall")}
               >
                 <PhoneOff size={20} />
               </button>
@@ -323,11 +324,11 @@ export function VoiceView({ chatId }: { chatId?: string }) {
           ) : (
             <>
               <button className="btn primary big" onClick={start} disabled={phase === "connecting"}>
-                <Mic size={18} /> {phase === "ended" ? "Start again" : "Start talking"}
+                <Mic size={18} /> {phase === "ended" ? t("voice.startAgain") : t("voice.startTalking")}
               </button>
               {sessionChat && hasTranscript && phase === "ended" && (
                 <button className="btn big" onClick={() => go(`#/chat/${sessionChat}`)}>
-                  See transcript
+                  {t("voice.transcript")}
                 </button>
               )}
             </>
