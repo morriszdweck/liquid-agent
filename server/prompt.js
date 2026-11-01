@@ -3,13 +3,13 @@
 // now, only relevant memory, and history packed newest-first into a budget.
 
 import os from "node:os";
-import { DEVICE, IS_MAC, PERSONALITIES, settings } from "./core.js";
+import { DEVICE, IS_MAC, IS_WIN, PERSONALITIES, settings } from "./core.js";
 import { memory } from "./memory.js";
 import { signature } from "./tools.js";
 import { uploads } from "./uploads.js";
 
-/** Telling the model it's on Linux keeps its shell commands right for this computer. */
-const MACHINE = IS_MAC ? "Mac" : "Linux computer";
+/** Telling the model which OS it's on keeps its shell commands right for this computer. */
+const MACHINE = IS_MAC ? "Mac" : IS_WIN ? "Windows computer" : "Linux computer";
 
 const HOME = os.homedir();
 const tilde = (f) => (f.startsWith(HOME) ? "~" + f.slice(HOME.length) : f);

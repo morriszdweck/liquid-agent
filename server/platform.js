@@ -4,13 +4,13 @@
 // use the tools macOS ships with. On Linux they use the common desktop tools
 // when they're installed, and say which package to add when they aren't.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { IS_MAC, run } from "./core.js";
+import { IS_MAC, IS_WIN, SHELL, run } from "./core.js";
 
 const HOME = os.homedir();
 
@@ -19,26 +19,34 @@ const found = new Map();
 export function has(cmd) {
   if (!found.has(cmd)) {
     const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+    const exts = IS_WIN && !path.extname(cmd) ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean) : [""];
+    const mode = IS_WIN ? fs.constants.F_OK : fs.constants.X_OK;
     found.set(
       cmd,
-      dirs.some((dir) => {
-        try {
-          fs.accessSync(path.join(dir, cmd), fs.constants.X_OK);
-          return true;
-        } catch {
-          return false;
-        }
-      }),
+      dirs.some((dir) =>
+        exts.some((ext) => {
+          try {
+            const full = path.join(dir, cmd + ext);
+            return fs.existsSync(full) && fs.statSync(full).isFile() && (fs.accessSync(full, mode), true);
+          } catch {
+            return false;
+          }
+        }),
+      ),
     );
   }
   return found.get(cmd);
 }
 
 const wayland = () => Boolean(process.env.WAYLAND_DISPLAY);
-const desktop = () => IS_MAC || Boolean(process.env.WAYLAND_DISPLAY || process.env.DISPLAY);
+const desktop = () => IS_MAC || IS_WIN || Boolean(process.env.WAYLAND_DISPLAY || process.env.DISPLAY);
 const desktopName = () => (process.env.XDG_CURRENT_DESKTOP ?? "").toLowerCase();
 
 function missing(what, packages) {
+  if (IS_WIN) {
+    const winget = packages.includes("ffmpeg") ? "Gyan.FFmpeg" : packages.includes("pandoc") ? "JohnMacFarlane.Pandoc" : packages.split(" (")[0];
+    return new Error(`${what} on Windows needs ${packages}. Install it with winget (winget install ${winget}), then try again.`);
+  }
   return new Error(`${what} on Linux needs ${packages}. Install it with your package manager (on Ubuntu: sudo apt install ${packages.split(" (")[0]}), then try again.`);
 }
 
@@ -46,10 +54,16 @@ function noDesktop() {
   if (!desktop()) throw new Error("No desktop session is running here, so there's no screen, clipboard or apps to use.");
 }
 
+/** Runs a PowerShell snippet on Windows with UTF-8 output. */
+function runPS(script, { env, timeout = 30_000 } = {}) {
+  const full = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'Stop'; ${script}`;
+  return run(SHELL, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", full], { env, timeout });
+}
+
 /** Starts a program that may keep running (a browser, an app) without waiting for it to quit. */
 function launch(cmd, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true });
     const timer = setTimeout(() => {
       child.unref();
       resolve();
@@ -69,7 +83,7 @@ function launch(cmd, args) {
 /** Feeds text to a program's stdin. Output is ignored: wl-copy and xclip leave a helper running that would hold pipes open. */
 function pipeInto(cmd, args, input) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"] });
+    const child = spawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"], windowsHide: true });
     child.on("error", reject);
     child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited with ${code}`))));
     child.stdin.end(input);
@@ -81,6 +95,7 @@ function pipeInto(cmd, args, input) {
 /** Opens a web address or a file with the default app. */
 export async function openPath(target) {
   if (IS_MAC) return run("open", [target]);
+  if (IS_WIN) return runPS("Start-Process -FilePath $env:LA_TARGET", { env: { LA_TARGET: target } });
   noDesktop();
   if (has("xdg-open")) return launch("xdg-open", [target]);
   if (has("gio")) return launch("gio", ["open", target]);
@@ -89,7 +104,31 @@ export async function openPath(target) {
 
 /** Shows a folder in Finder or the file manager. */
 export function reveal(dir) {
+  if (IS_WIN) return launch("explorer.exe", [dir]);
   return openPath(dir);
+}
+
+function winShortcuts() {
+  const roots = [
+    path.join(process.env.ProgramData ?? "C:\\ProgramData", "Microsoft", "Windows", "Start Menu", "Programs"),
+    path.join(process.env.APPDATA ?? path.join(HOME, "AppData", "Roaming"), "Microsoft", "Windows", "Start Menu", "Programs"),
+  ];
+  const out = [];
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (/\.(lnk|url)$/i.test(e.name)) out.push(full);
+    }
+  };
+  for (const r of roots) walk(r);
+  return out;
 }
 
 function desktopFiles() {
@@ -135,6 +174,15 @@ function findApp(name) {
 /** Opens an app by name. */
 export async function openApp(name) {
   if (IS_MAC) return run("open", ["-a", name]);
+  if (IS_WIN) {
+    const want = name.trim().toLowerCase();
+    const shortcuts = winShortcuts();
+    const exact = shortcuts.find((f) => path.basename(f, path.extname(f)).toLowerCase() === want);
+    const fuzzy = exact ?? shortcuts.find((f) => path.basename(f, path.extname(f)).toLowerCase().includes(want));
+    if (fuzzy) return openPath(fuzzy);
+    if (/^[\w.+-]+$/.test(want) && has(want)) return launch(want, []);
+    throw new Error(`No app called “${name}” was found.`);
+  }
   noDesktop();
   const app = findApp(name);
   if (app) {
@@ -162,10 +210,14 @@ function clipboardTools() {
 const NO_CLIPBOARD = () => missing("The clipboard", wayland() ? "wl-clipboard" : "xclip");
 
 /** The command the safety helper is shown for a clipboard write. */
-export const copyCommand = () => (IS_MAC ? "pbcopy" : (clipboardTools()[0]?.write ?? ["wl-copy"]).flat().join(" "));
+export const copyCommand = () => (IS_MAC ? "pbcopy" : IS_WIN ? "Set-Clipboard" : (clipboardTools()[0]?.write ?? ["wl-copy"]).flat().join(" "));
 
 export async function readClipboard() {
   if (IS_MAC) return run("pbpaste", []);
+  if (IS_WIN) {
+    const out = await runPS("$v = Get-Clipboard -Raw; if ($null -ne $v) { [Console]::Write($v) }", { timeout: 10_000 });
+    return out;
+  }
   noDesktop();
   const tool = clipboardTools()[0];
   if (!tool) throw NO_CLIPBOARD();
@@ -179,6 +231,19 @@ export async function readClipboard() {
 
 export async function writeClipboard(text) {
   if (IS_MAC) return pipeInto("pbcopy", [], text);
+  if (IS_WIN) {
+    return pipeInto(
+      SHELL,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())",
+      ],
+      text,
+    );
+  }
   noDesktop();
   const tool = clipboardTools()[0];
   if (!tool) throw NO_CLIPBOARD();
@@ -190,6 +255,35 @@ export async function writeClipboard(text) {
 /** Saves a PNG of the whole screen to `file`. */
 export async function screenshot(file) {
   if (IS_MAC) return run("screencapture", ["-x", "-C", "-t", "png", file]);
+  if (IS_WIN) {
+    await runPS(
+      `
+      Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+      try {
+        Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' -Name Win32 -Namespace LiquidNative -ErrorAction SilentlyContinue
+        [void][LiquidNative.Win32]::SetProcessDPIAware()
+      } catch {}
+      $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+      $w = [Math]::Max(1, $b.Width)
+      $h = [Math]::Max(1, $b.Height)
+      $bmp = New-Object System.Drawing.Bitmap($w, $h)
+      $g = $null
+      try {
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+        $bmp.Save($env:LA_FILE, [System.Drawing.Imaging.ImageFormat]::Png)
+      } finally {
+        if ($null -ne $g) { $g.Dispose() }
+        $bmp.Dispose()
+      }
+      `,
+      { env: { LA_FILE: file }, timeout: 30_000 },
+    );
+    if (!fs.existsSync(file) || fs.statSync(file).size === 0) {
+      throw new Error("Screenshot file was not created or is empty.");
+    }
+    return;
+  }
   noDesktop();
   const de = desktopName();
   const tries = [];
@@ -268,7 +362,7 @@ const RAW_PICTURE = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", g
 export async function convertImage(src, dest, max = 1280) {
   if (IS_MAC) return run("sips", ["-s", "format", dest.endsWith(".png") ? "png" : "jpeg", "-Z", String(max), src, "--out", dest]);
   const tries = [];
-  for (const im of ["magick", "convert"]) if (has(im)) tries.push([im, [`${src}[0]`, "-auto-orient", "-resize", `${max}x${max}>`, dest]]);
+  for (const im of ["magick", ...(IS_WIN ? [] : ["convert"])]) if (has(im)) tries.push([im, [`${src}[0]`, "-auto-orient", "-resize", `${max}x${max}>`, dest]]);
   if (has("ffmpeg")) {
     const fit = `scale='min(${max},iw)':'min(${max},ih)':force_original_aspect_ratio=decrease`;
     tries.push(["ffmpeg", ["-nostdin", "-loglevel", "error", "-y", "-i", src, "-frames:v", "1", "-vf", fit, dest]]);
@@ -278,6 +372,42 @@ export async function convertImage(src, dest, max = 1280) {
   for (const [cmd, args] of tries) {
     try {
       return await run(cmd, args, { timeout: 60_000 });
+    } catch (e) {
+      last = e;
+    }
+  }
+  if (IS_WIN) {
+    try {
+      await runPS(
+        `
+        Add-Type -AssemblyName System.Drawing
+        $img = [System.Drawing.Image]::FromFile($env:LA_SRC)
+        try {
+          $max = [int]$env:LA_MAX
+          $w = $img.Width
+          $h = $img.Height
+          if ($w -gt $max -or $h -gt $max) {
+            if ($w -ge $h) { $h = [Math]::Max(1, [int][Math]::Round($h * $max / $w)); $w = $max }
+            else { $w = [Math]::Max(1, [int][Math]::Round($w * $max / $h)); $h = $max }
+          }
+          $bmp = New-Object System.Drawing.Bitmap($w, $h)
+          try {
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $g.DrawImage($img, 0, 0, $w, $h)
+            $g.Dispose()
+            $fmt = if ($env:LA_DEST -match '\\.png$') { [System.Drawing.Imaging.ImageFormat]::Png } else { [System.Drawing.Imaging.ImageFormat]::Jpeg }
+            $bmp.Save($env:LA_DEST, $fmt)
+          } finally {
+            $bmp.Dispose()
+          }
+        } finally {
+          $img.Dispose()
+        }
+        `,
+        { env: { LA_SRC: src, LA_DEST: dest, LA_MAX: String(max) }, timeout: 60_000 },
+      );
+      return;
     } catch (e) {
       last = e;
     }
@@ -307,10 +437,31 @@ export async function toWav(src, dest) {
 }
 
 /** Plain text from a Word, RTF or OpenDocument file. */
-export function documentText(file) {
+export async function documentText(file) {
   if (IS_MAC) return run("textutil", ["-convert", "txt", "-stdout", file]);
   if (has("pandoc")) return run("pandoc", ["-t", "plain", "--wrap=none", file]);
-  return Promise.reject(missing("Reading this kind of document", "pandoc"));
+  if (IS_WIN && /\.(docx|odt)$/i.test(file)) {
+    return runPS(
+      `
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      $zip = [System.IO.Compression.ZipFile]::OpenRead($env:LA_DOC)
+      try {
+        $entryName = if ($env:LA_DOC -match '\\.odt$') { 'content.xml' } else { 'word/document.xml' }
+        $entry = $zip.GetEntry($entryName)
+        if (-not $entry) { throw 'No document XML inside file.' }
+        $sr = New-Object System.IO.StreamReader($entry.Open(), [System.Text.Encoding]::UTF8)
+        $xml = $sr.ReadToEnd()
+        $sr.Dispose()
+        $text = $xml -replace '</(w:p|text:p|text:h)>', "\`n" -replace '<[^>]+>', ''
+        [System.Net.WebUtility]::HtmlDecode($text).Trim()
+      } finally {
+        $zip.Dispose()
+      }
+      `,
+      { env: { LA_DOC: file }, timeout: 30_000 },
+    );
+  }
+  throw missing("Reading this kind of document", "pandoc");
 }
 
 // ---- Notifications ----
@@ -318,6 +469,22 @@ export function documentText(file) {
 export function notify(text) {
   if (IS_MAC) {
     return run("osascript", ["-e", "on run argv", "-e", 'display notification (item 1 of argv) with title "Liquid Agent" sound name "Glass"', "-e", "end run", text]);
+  }
+  if (IS_WIN) {
+    return runPS(
+      `
+      try {
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $escaped = [System.Security.SecurityElement]::Escape($env:LA_NOTIFY)
+        $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>Liquid Agent</text><text>$escaped</text></binding></visual></toast>")
+        $toast = [Windows.UI.Notifications.ToastNotification]::New($xml)
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Liquid Agent').Show($toast)
+      } catch {}
+      `,
+      { env: { LA_NOTIFY: text }, timeout: 10_000 },
+    ).catch(() => {});
   }
   if (!desktop()) return Promise.resolve();
   if (has("notify-send")) return run("notify-send", ["-a", "Liquid Agent", "Liquid Agent", text]);
@@ -334,6 +501,37 @@ export function notify(text) {
 
 /** Programs listening on a TCP port here, with their command lines. A pid of 0 means one we may not look at. */
 export async function listeners(port) {
+  if (IS_WIN) {
+    let raw = "";
+    try {
+      raw = await runPS(
+        `
+        $conns = Get-NetTCPConnection -LocalPort ${Number(port)} -State Listen -ErrorAction SilentlyContinue
+        if (-not $conns) { exit 0 }
+        $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique
+        foreach ($p in $pids) {
+          if ($p -le 0) { continue }
+          $cmd = ''
+          try { $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $p" -ErrorAction SilentlyContinue).CommandLine } catch {}
+          Write-Output "$p\`t$cmd"
+        }
+        `,
+        { timeout: 10_000 },
+      );
+    } catch {
+      return [];
+    }
+    return raw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => {
+        const tab = line.indexOf("\t");
+        const pid = Number(tab >= 0 ? line.slice(0, tab) : line);
+        const cmd = tab >= 0 ? line.slice(tab + 1).trim() : "";
+        return { pid, command: pid === process.pid && !cmd ? process.argv.join(" ") : cmd };
+      })
+      .filter((x) => x.pid > 0);
+  }
   if (IS_MAC || !fs.existsSync("/proc/net/tcp")) {
     let pids = [];
     try {
@@ -404,8 +602,34 @@ function vulkanDrivers() {
   return names.filter((n) => !/lvp|lavapipe|swiftshader/i.test(n));
 }
 
-/** What the AI engine could use on this Linux computer. */
+/** What the AI engine could use on this Linux or Windows computer. */
 export function linuxGPU() {
+  if (IS_WIN) {
+    const sysRoot = process.env.SystemRoot ?? "C:\\Windows";
+    const vulkanDll = fs.existsSync(path.join(sysRoot, "System32", "vulkan-1.dll"));
+    let nvidiaDriver = null;
+    const smiCandidates = [
+      path.join(sysRoot, "System32", "nvidia-smi.exe"),
+      path.join(process.env.ProgramFiles ?? "C:\\Program Files", "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+      has("nvidia-smi") ? "nvidia-smi.exe" : "",
+    ].filter(Boolean);
+    for (const smi of smiCandidates) {
+      try {
+        if (smi !== "nvidia-smi.exe" && !fs.existsSync(smi)) continue;
+        const out = execFileSync(smi, ["--query-gpu=driver_version", "--format=csv,noheader"], {
+          encoding: "utf8",
+          timeout: 3000,
+          windowsHide: true,
+        }).trim();
+        const m = out.match(/^(\d+)\./);
+        if (m) {
+          nvidiaDriver = Number(m[1]);
+          break;
+        }
+      } catch {}
+    }
+    return { vulkan: vulkanDll, nvidiaDriver };
+  }
   let nvidiaDriver = null;
   try {
     const v = fs.readFileSync("/proc/driver/nvidia/version", "utf8").match(/Kernel Module\s+(?:for \S+\s+)?(\d+)\./);

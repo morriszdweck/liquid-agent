@@ -9,7 +9,8 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --mac dmg --arm64 --x64"
+    "dist": "electron-builder --mac dmg --arm64 --x64",
+    "dist:win": "electron-builder --win --x64"
   },
   "devDependencies": {
     "electron": "44.8.0",
@@ -21,6 +22,15 @@
     "copyright": "Mincoffical",
     "files": ["main.cjs", "setup.html", "package.json"],
     "directories": { "buildResources": "build", "output": "dist" },
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    },
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",

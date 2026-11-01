@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DIRS, ROOT, bus, load, run, save, settings } from "./core.js";
+import { DIRS, IS_WIN, ROOT, SHELL, bus, load, run, save, settings } from "./core.js";
 import { agent } from "./agent.js";
 import { backends } from "./backends.js";
 import { voiceCalls } from "./voice.js";
@@ -186,10 +186,24 @@ class Updater {
     const port = process.env.LIQUID_AGENT_PORT ?? "8170";
     const args = process.argv.slice(2).filter((a) => a !== "--open");
     const log = fs.openSync(path.join(DIRS.logs, "server.log"), "a");
-    const child = spawn("/bin/sh", ["-c", HANDOVER, "handover", String(process.pid), ROOT, process.execPath, port, String(this.ready), ...args], {
-      detached: true,
-      stdio: ["ignore", log, log],
-    });
+    const child = IS_WIN
+      ? spawn(SHELL, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", HANDOVER_WIN], {
+          detached: true,
+          windowsHide: true,
+          stdio: ["ignore", log, log],
+          env: {
+            ...process.env,
+            LA_PID: String(process.pid),
+            LA_APP: ROOT,
+            LA_NODE: process.execPath,
+            LA_PORT: port,
+            LA_BUILD: String(this.ready),
+          },
+        })
+      : spawn("/bin/sh", ["-c", HANDOVER, "handover", String(process.pid), ROOT, process.execPath, port, String(this.ready), ...args], {
+          detached: true,
+          stdio: ["ignore", log, log],
+        });
     let failed = false;
     child.on("error", (e) => {
       // Nothing will start the new copy, so stay up on this one.
@@ -234,6 +248,47 @@ sleep 1
 rm -rf "$app.bad"
 mv "$app" "$app.bad" && mv "$app.old" "$app"
 start "$@"
+`;
+
+const HANDOVER_WIN = `
+$targetPid = [int]$env:LA_PID
+$app = $env:LA_APP
+$node = $env:LA_NODE
+$port = $env:LA_PORT
+$build = [int]$env:LA_BUILD
+for ($i = 0; $i -lt 100; $i++) {
+  if (-not (Get-Process -Id $targetPid -ErrorAction SilentlyContinue)) { break }
+  Start-Sleep -Milliseconds 200
+}
+Remove-Item -Recurse -Force "$app.old" -ErrorAction SilentlyContinue
+try {
+  Move-Item -Path $app -Destination "$app.old" -Force
+  Move-Item -Path "$app.next" -Destination $app -Force
+} catch {
+  if ((Test-Path "$app.old") -and -not (Test-Path $app)) { Move-Item -Path "$app.old" -Destination $app -Force }
+  Start-Process -FilePath $node -ArgumentList @("$app\\server\\index.js") -WindowStyle Hidden
+  exit 1
+}
+$proc = Start-Process -FilePath $node -ArgumentList @("$app\\server\\index.js") -WindowStyle Hidden -PassThru
+for ($i = 0; $i -lt 120; $i++) {
+  try {
+    $res = Invoke-RestMethod -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 2
+    if ($res.build -eq $build) {
+      Remove-Item -Recurse -Force "$app.old" -ErrorAction SilentlyContinue
+      Write-Output "Updated to build $build"
+      exit 0
+    }
+  } catch {}
+  if ($proc.HasExited) { break }
+  Start-Sleep -Milliseconds 500
+}
+Write-Output "Build $build didn't start, so the old version is back."
+Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+Remove-Item -Recurse -Force "$app.bad" -ErrorAction SilentlyContinue
+Move-Item -Path $app -Destination "$app.bad" -Force -ErrorAction SilentlyContinue
+Move-Item -Path "$app.old" -Destination $app -Force -ErrorAction SilentlyContinue
+Start-Process -FilePath $node -ArgumentList @("$app\\server\\index.js") -WindowStyle Hidden
 `;
 
 export const updater = new Updater();

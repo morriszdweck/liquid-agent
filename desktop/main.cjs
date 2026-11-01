@@ -9,12 +9,21 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const IS_WIN = process.platform === "win32";
 const PORT = Number(process.env.LIQUID_AGENT_PORT || 8170);
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 const ROOT = path.join(os.homedir(), ".liquid-agent");
 const SERVER = path.join(ROOT, "app", "server", "index.js");
-const DATA = path.join(os.homedir(), "Library", "Application Support", "LiquidAgent");
-const INSTALLER = "https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh";
+const DATA = process.env.LIQUID_AGENT_HOME ?? (
+  process.platform === "darwin"
+    ? path.join(os.homedir(), "Library", "Application Support", "LiquidAgent")
+    : IS_WIN
+      ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "LiquidAgent")
+      : path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"), "liquid-agent")
+);
+const INSTALLER = IS_WIN
+  ? "https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.ps1"
+  : "https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh";
 
 let win = null;
 
@@ -51,6 +60,19 @@ async function running() {
 
 /** The Node.js the installer picked: it is written into the liquid-agent command. */
 function installedNode() {
+  if (IS_WIN) {
+    try {
+      const script = fs.readFileSync(path.join(ROOT, "bin", "liquid-agent.cmd"), "utf8");
+      const match = script.match(/"([^"]+)"\s+"%ROOT%\\app\\server\\index\.js"/);
+      if (match && fs.existsSync(match[1])) return match[1];
+    } catch {}
+    const candidates = [
+      path.join(ROOT, "node", "node.exe"),
+      process.execPath.toLowerCase().endsWith("node.exe") ? process.execPath : null,
+      path.join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs", "node.exe"),
+    ].filter(Boolean);
+    return candidates.find((p) => fs.existsSync(p)) ?? "node";
+  }
   try {
     const script = fs.readFileSync(path.join(ROOT, "bin", "liquid-agent"), "utf8");
     const node = script.match(/nohup "([^"]+)" "\$ROOT\/app\/server\/index\.js"/)?.[1];
@@ -65,7 +87,12 @@ function startServer() {
   fs.mkdirSync(path.join(DATA, "logs"), { recursive: true });
   const log = fs.openSync(path.join(DATA, "logs", "server.log"), "a");
   // Detached, like the liquid-agent command, so it keeps running reminders and routines on its own schedule.
-  spawn(node, [SERVER], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, LIQUID_AGENT_PORT: String(PORT) } }).unref();
+  spawn(node, [SERVER], {
+    detached: true,
+    windowsHide: true,
+    stdio: ["ignore", log, log],
+    env: { ...process.env, LIQUID_AGENT_PORT: String(PORT) },
+  }).unref();
   startedServer = true;
 }
 
@@ -80,9 +107,18 @@ async function waitUntilRunning(seconds) {
 /** Runs the one-line installer, showing what it prints on the setup screen. */
 function install(say) {
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/bash", ["-c", `curl -fsSL ${INSTALLER} | bash`], {
-      env: { ...process.env, LIQUID_AGENT_NO_OPEN: "1", LIQUID_AGENT_DESKTOP: "1", LIQUID_AGENT_PORT: String(PORT) },
-    });
+    const child = IS_WIN
+      ? spawn(
+          "powershell.exe",
+          ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `irm ${INSTALLER} | iex`],
+          {
+            env: { ...process.env, LIQUID_AGENT_NO_OPEN: "1", LIQUID_AGENT_DESKTOP: "1", LIQUID_AGENT_PORT: String(PORT) },
+            windowsHide: true,
+          },
+        )
+      : spawn("/bin/bash", ["-c", `curl -fsSL ${INSTALLER} | bash`], {
+          env: { ...process.env, LIQUID_AGENT_NO_OPEN: "1", LIQUID_AGENT_DESKTOP: "1", LIQUID_AGENT_PORT: String(PORT) },
+        });
     let tail = "";
     const read = (chunk) => {
       tail = (tail + chunk.toString()).slice(-2000);
@@ -106,8 +142,8 @@ function createWindow() {
     minHeight: 520,
     show: false,
     title: "Liquid Agent",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 27 },
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    ...(process.platform === "darwin" ? { trafficLightPosition: { x: 18, y: 27 } } : {}),
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#0a0a0b" : "#f3f3f4",
     webPreferences: { contextIsolation: true, sandbox: true, spellcheck: true },
   });
@@ -189,10 +225,24 @@ app.on("activate", () => {
   if (!win) open();
 });
 
-// Closing the window keeps the app in the Dock, like other Mac apps.
-app.on("window-all-closed", () => {});
+// Closing the window keeps the app in the Dock on Mac; quits on Windows.
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
 
 // Quitting stops the copy this app started; one started from the command line keeps running.
 app.on("will-quit", () => {
-  if (startedServer) execFile("/usr/bin/pkill", ["-f", SERVER]);
+  if (startedServer) {
+    if (IS_WIN) {
+      execFile("powershell.exe", [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${SERVER.replace(/\\/g, "\\\\")}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+      ]);
+    } else {
+      execFile("/usr/bin/pkill", ["-f", SERVER]);
+    }
+  }
 });

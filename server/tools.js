@@ -20,7 +20,9 @@ const HOME = os.homedir();
 const UA =
   process.platform === "darwin"
     ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
-    : "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+    : process.platform === "win32"
+      ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+      : "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 const p = (name, desc, extra = {}) => ({ name, desc, type: "string", ...extra });
 const short = (s, n = 60) => {
@@ -28,7 +30,7 @@ const short = (s, n = 60) => {
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
 };
 
-const home = (f) => (f === "~" || f.startsWith("~/") ? path.join(HOME, f.slice(1)) : f);
+const home = (f) => (f === "~" || f.startsWith("~/") || f.startsWith("~\\") ? path.join(HOME, f.slice(1)) : f);
 
 /** Resolves ~ and paths relative to the workspace folder. */
 export function expand(file) {

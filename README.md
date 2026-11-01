@@ -1,6 +1,6 @@
 # Liquid Agent
 
-A private AI agent for your Mac or Linux computer that runs **LFM3 1.7B** and **LFM3 Omni 2B** entirely on your computer, with a clean web interface in your browser.
+A private AI agent for your Mac, Windows or Linux computer that runs **LFM3 1.7B** and **LFM3 Omni 2B** entirely on your computer, with a clean web interface in your browser.
 
 - **Chat** with full Markdown: tables, code with highlighting and copy buttons, math, task lists.
 - **Does things on your computer**: runs commands, reads and writes files, searches and reads the web, opens apps and links, sets reminders, uses the clipboard, and clicks around websites with [Betterwright](https://www.npmjs.com/package/betterwright).
@@ -27,6 +27,12 @@ Or paste this into Terminal on macOS, or a terminal on Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh | bash
+```
+
+Or paste this into PowerShell on Windows:
+
+```powershell
+irm https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.ps1 | iex
 ```
 
 It installs a ready-to-run copy in `~/.liquid-agent` (no npm or build step, and a private copy of Node.js if you don't have one), adds **Liquid Agent** to your app menu on Linux and a `liquid-agent` command, then opens the setup screen at <http://127.0.0.1:8170> (in the Mac app when it's installed). Pick what to download and a model size there; that's it.

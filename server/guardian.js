@@ -42,6 +42,25 @@ const HARD_DENY = [
   "poweroff",
   "crontab -r",
   "chattr ",
+  // Windows
+  "format ",
+  "diskpart",
+  "bcdedit",
+  "vssadmin delete",
+  "wbadmin delete",
+  "cipher /w",
+  "reg delete",
+  "del /f /s /q c:\\",
+  "rd /s /q c:\\",
+  "rmdir /s /q c:\\",
+  "remove-item -recurse -force c:\\",
+  "stop-computer",
+  "restart-computer",
+  "clear-disk",
+  "initialize-disk",
+  "format-volume",
+  "| iex",
+  "| invoke-expression",
 ];
 
 /** True when the action is risky enough that a person must decide. */

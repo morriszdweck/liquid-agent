@@ -12,7 +12,9 @@
     "build": "vite build",
     "start": "node server/index.js --open",
     "serve": "node server/index.js",
-    "dev": "vite build --watch --mode development & node --watch-path=server server/index.js",
+    "dev": "node scripts/dev.mjs",
+    "dev:ui": "vite build --watch --mode development",
+    "dev:server": "node --watch-path=server server/index.js",
     "typecheck": "tsc --noEmit -p web",
     "test": "node scripts/smoke.mjs"
   },

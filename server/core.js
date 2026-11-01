@@ -13,14 +13,17 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const HOME = os.homedir();
 
 export const IS_MAC = process.platform === "darwin";
+export const IS_WIN = process.platform === "win32";
 /** How prompts and messages name this computer. */
-export const DEVICE = IS_MAC ? "Mac" : "computer";
+export const DEVICE = IS_MAC ? "Mac" : IS_WIN ? "PC" : "computer";
 
 export const DATA =
   process.env.LIQUID_AGENT_HOME ??
-  (process.platform === "darwin"
+  (IS_MAC
     ? path.join(HOME, "Library", "Application Support", "LiquidAgent")
-    : path.join(process.env.XDG_DATA_HOME ?? path.join(HOME, ".local", "share"), "liquid-agent"));
+    : IS_WIN
+      ? path.join(process.env.LOCALAPPDATA ?? path.join(HOME, "AppData", "Local"), "LiquidAgent")
+      : path.join(process.env.XDG_DATA_HOME ?? path.join(HOME, ".local", "share"), "liquid-agent"));
 
 export const DIRS = {
   models: path.join(DATA, "models"),
@@ -184,9 +187,15 @@ export const bus = {
 const MAX_OUTPUT = 200_000;
 
 /** Runs a program; resolves with its output, rejects on a non-zero exit. */
-export function run(cmd, args, { cwd, env, timeout = 600_000, signal } = {}) {
+export function run(cmd, args, { cwd, env, timeout = 600_000, signal, shell: useShell } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, signal });
+    const child = spawn(cmd, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      signal,
+      windowsHide: true,
+      shell: useShell ?? (IS_WIN && /\.(cmd|bat)$/i.test(cmd)),
+    });
     let out = "";
     const add = (d) => {
       if (out.length < MAX_OUTPUT) out += d;
@@ -206,9 +215,14 @@ export function run(cmd, args, { cwd, env, timeout = 600_000, signal } = {}) {
   });
 }
 
-/** The shell tool's shell: zsh on macOS; on Linux the user's own bash or zsh, else bash, else sh. */
+/** The shell tool's shell: zsh on macOS; PowerShell on Windows; on Linux the user's own bash or zsh, else bash, else sh. */
 export const SHELL = (() => {
   if (IS_MAC) return "/bin/zsh";
+  if (IS_WIN) {
+    const sysRoot = process.env.SystemRoot ?? "C:\\Windows";
+    const winPs = path.join(sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    return fs.existsSync(winPs) ? winPs : "powershell.exe";
+  }
   const own = process.env.SHELL ?? "";
   for (const candidate of [/\/(bash|zsh)$/.test(own) ? own : "", "/bin/bash", "/usr/bin/bash", "/bin/sh"]) {
     try {
@@ -224,7 +238,10 @@ export const SHELL = (() => {
 /** Shell command for the shell tool. Never throws: failures come back as text the model can read. */
 export function shell(command, { cwd, timeout = 60_000, signal } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(SHELL, [path.basename(SHELL) === "sh" ? "-c" : "-lc", command], { cwd, signal });
+    const args = IS_WIN
+      ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+      : [path.basename(SHELL) === "sh" ? "-c" : "-lc", command];
+    const child = spawn(SHELL, args, { cwd, signal, windowsHide: true });
     let out = "";
     const add = (d) => {
       if (out.length < MAX_OUTPUT) out += d;

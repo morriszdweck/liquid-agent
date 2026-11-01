@@ -43,10 +43,15 @@ let server = start();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let token = "";
 
-function finish(code) {
-  server.kill("SIGTERM");
-  fs.rmSync(home, { recursive: true, force: true });
-  process.exit(code);
+async function finish(code) {
+  server.removeAllListeners("exit");
+  server.kill();
+  await new Promise((r) => server.once("exit", r));
+  try {
+    fs.rmSync(home, { recursive: true, force: true });
+  } catch {}
+  console.log("Finish called with:", code);
+  process.exitCode = code;
 }
 
 function fail(message) {
@@ -303,4 +308,4 @@ if (HELPERS) {
 }
 
 console.log("All good.");
-finish(0);
+await finish(0);

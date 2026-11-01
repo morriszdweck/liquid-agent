@@ -6,7 +6,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import { DATA, ROOT, bus, flushAll, settings, updateSettings } from "./core.js";
+import { DATA, IS_WIN, ROOT, bus, flushAll, settings, updateSettings } from "./core.js";
 import { openPath, reveal } from "./platform.js";
 import { backends } from "./backends.js";
 import { agent } from "./agent.js";
@@ -420,5 +420,5 @@ function shutdown() {
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-process.on("SIGHUP", shutdown);
+if (!IS_WIN) process.on("SIGHUP", shutdown);
 process.on("exit", () => backends.stopAll());

@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { DATA, DEVICE, DIRS, IS_MAC, QUANTS, ROOT, bus, bytesText, load, run, save, settings, sleep } from "./core.js";
+import { DATA, DEVICE, DIRS, IS_MAC, IS_WIN, QUANTS, ROOT, bus, bytesText, load, run, save, settings, sleep } from "./core.js";
 import { hfHeaders, modelError, probeGGUF, resolveHfModel } from "./models.js";
 import { linuxGPU, listeners } from "./platform.js";
 
@@ -83,6 +83,18 @@ const ENGINE_TEXT = {
 function engineAsset(assets) {
   const find = (suffix) => assets.find((a) => a.name.startsWith("llama-") && a.name.endsWith(suffix));
   if (FLAVOR === "metal") return find(`bin-macos-${ARCH}.tar.gz`);
+  if (IS_WIN) {
+    if (FLAVOR === "vulkan") return find(`bin-win-vulkan-${ARCH}.zip`);
+    if (FLAVOR === "cuda") {
+      const driver = linuxGPU().nvidiaDriver ?? 0;
+      const builds = assets
+        .map((a) => ({ a, v: a.name.match(new RegExp(`^llama-.*bin-win-cuda-(\\d+)\\.(\\d+)-${ARCH}\\.zip$`)) }))
+        .filter((x) => x.v && (Number(x.v[1]) >= 13 ? driver >= 580 : driver >= 525))
+        .sort((x, y) => Number(y.v[1]) - Number(x.v[1]) || Number(y.v[2]) - Number(x.v[2]));
+      if (builds.length) return builds[0].a;
+    }
+    return find(`bin-win-cpu-${ARCH}.zip`) ?? find(`bin-win-${ARCH}.zip`);
+  }
   if (FLAVOR === "vulkan") return find(`bin-ubuntu-vulkan-${ARCH}.tar.gz`);
   if (FLAVOR === "cuda") {
     const driver = linuxGPU().nvidiaDriver ?? 0;
@@ -169,6 +181,7 @@ function pruneCustom(keep) {
 
 /** Finds the llama-server inside the app's own engine folder. */
 function findEngine() {
+  const binName = IS_WIN ? "llama-server.exe" : "llama-server";
   const stack = [DIRS.engine];
   while (stack.length) {
     const dir = stack.pop();
@@ -181,7 +194,7 @@ function findEngine() {
     for (const e of entries) {
       const full = path.join(dir, e.name);
       if (e.isDirectory()) stack.push(full);
-      else if (e.name === "llama-server") return full;
+      else if (e.name === binName) return full;
     }
   }
   return null;
@@ -657,25 +670,26 @@ class Backends {
     for (const r of releases) {
       asset = engineAsset(r.assets ?? []);
       if (!asset) continue;
-      const cuda = asset.name.match(/bin-ubuntu-cuda-[\d.]+-\w+\.tar\.gz$/)?.[0];
+      const cuda = asset.name.match(/bin-(?:ubuntu|win)-cuda-[\d.]+-\w+\.(?:tar\.gz|zip)$/)?.[0];
       runtime = cuda && r.assets.find((a) => a.name.startsWith("cudart-") && a.name.endsWith(cuda));
       if (!cuda || runtime) break;
     }
     if (!asset) throw new Error("No llama.cpp build for this computer was found.");
-    const archive = path.join(DIRS.tools, "llama.tar.gz");
-    const extra = path.join(DIRS.tools, "cudart.tar.gz");
+    const ext = asset.name.endsWith(".zip") ? "zip" : "tar.gz";
+    const archive = path.join(DIRS.tools, `llama.${ext}`);
+    const extra = path.join(DIRS.tools, `cudart.${ext}`);
     await download(asset.browser_download_url, archive, { signal, onProgress: this.progress("engine", "Downloading") });
     if (runtime) await download(runtime.browser_download_url, extra, { signal, onProgress: this.progress("engine", "Downloading CUDA") });
     this.set("engine", { status: "installing", text: "Unpacking…" });
     fs.rmSync(DIRS.engine, { recursive: true, force: true });
     fs.mkdirSync(DIRS.engine, { recursive: true });
-    await run("tar", ["-xzf", archive, "-C", DIRS.engine], { signal });
+    await run("tar", ["-xf", archive, "-C", DIRS.engine], { signal });
     fs.rmSync(archive, { force: true });
     const server = findEngine();
     if (!server) throw new Error("The download didn't contain llama-server.");
     if (runtime) {
       // The CUDA libraries go next to llama-server, where it looks for them.
-      await run("tar", ["-xzf", extra, "-C", path.dirname(server), "--strip-components", "1"], { signal });
+      await run("tar", ["-xf", extra, "-C", path.dirname(server), ...(IS_WIN ? [] : ["--strip-components", "1"])], { signal });
       fs.rmSync(extra, { force: true });
     }
     const flavor = asset.name.includes("-cuda-") ? "cuda" : asset.name.includes("-vulkan-") ? "vulkan" : IS_MAC ? "metal" : "cpu";
@@ -691,16 +705,18 @@ class Backends {
   }
 
   async ensureUV(signal) {
-    const uv = path.join(DIRS.tools, "uv", "uv");
+    const uv = path.join(DIRS.tools, "uv", IS_WIN ? "uv.exe" : "uv");
     if (fs.existsSync(uv)) return uv;
-    const triple = `${ARCH === "arm64" ? "aarch64" : "x86_64"}-${process.platform === "darwin" ? "apple-darwin" : "unknown-linux-gnu"}`;
-    const archive = path.join(DIRS.tools, "uv.tar.gz");
-    await download(`https://github.com/astral-sh/uv/releases/latest/download/uv-${triple}.tar.gz`, archive, {
+    const arch = ARCH === "arm64" ? "aarch64" : "x86_64";
+    const triple = IS_WIN ? `${arch}-pc-windows-msvc` : `${arch}-${IS_MAC ? "apple-darwin" : "unknown-linux-gnu"}`;
+    const ext = IS_WIN ? "zip" : "tar.gz";
+    const archive = path.join(DIRS.tools, `uv.${ext}`);
+    await download(`https://github.com/astral-sh/uv/releases/latest/download/uv-${triple}.${ext}`, archive, {
       signal,
       onProgress: this.progress("guardian", "Getting Python tools"),
     });
     fs.mkdirSync(path.dirname(uv), { recursive: true });
-    await run("tar", ["-xzf", archive, "-C", path.dirname(uv), "--strip-components=1"], { signal });
+    await run("tar", ["-xf", archive, "-C", path.dirname(uv), ...(IS_WIN ? [] : ["--strip-components=1"])], { signal });
     fs.rmSync(archive, { force: true });
     return uv;
   }
@@ -708,19 +724,20 @@ class Backends {
   async installGuardian(signal) {
     const uv = await this.ensureUV(signal);
     const venv = path.join(DIRS.guardian, ".venv");
+    const py = path.join(venv, IS_WIN ? "Scripts" : "bin", IS_WIN ? "python.exe" : "python");
     const env = this.pythonEnv;
     this.set("guardian", { status: "installing", text: "Setting up a private Python…" });
     await run(uv, ["venv", "--allow-existing", "--python", "3.12", venv], { env, signal });
     this.set("guardian", { status: "installing", text: "Installing the safety model's tools (the slow part)…" });
-    // Auto 150M is small enough for the CPU. On Linux the default PyTorch brings gigabytes of CUDA libraries, so take the CPU build.
+    // Auto 150M is small enough for the CPU. On Linux/Windows the default PyTorch can bring gigabytes of CUDA libraries, so take the CPU build.
     const torch = IS_MAC ? [] : ["--torch-backend", "cpu"];
-    await run(uv, ["pip", "install", ...torch, "--python", path.join(venv, "bin", "python"), "-r", path.join(ROOT, "guardian", "requirements.txt")], {
+    await run(uv, ["pip", "install", ...torch, "--python", py, "-r", path.join(ROOT, "guardian", "requirements.txt")], {
       env,
       signal,
       timeout: 1_800_000,
     });
     this.set("guardian", { status: "installing", text: "Downloading Auto 150M…" });
-    await run(path.join(venv, "bin", "python"), ["-I", path.join(ROOT, "guardian", "server.py"), "--repo", GUARDIAN_MODEL, "--download-only"], {
+    await run(py, ["-I", path.join(ROOT, "guardian", "server.py"), "--repo", GUARDIAN_MODEL, "--download-only"], {
       env,
       signal,
       timeout: 900_000,
@@ -732,20 +749,20 @@ class Backends {
   get nodeEnv() {
     const bin = path.dirname(process.execPath);
     // Betterwright keeps its browser and profile with the rest of our files, so Remove removes them.
-    return { PATH: `${bin}:${process.env.PATH}`, npm_config_cache: path.join(DIRS.tools, "npm-cache"), BETTERWRIGHT_HOME: path.join(DIRS.bridge, "home") };
+    return { PATH: `${bin}${path.delimiter}${process.env.PATH}`, npm_config_cache: path.join(DIRS.tools, "npm-cache"), BETTERWRIGHT_HOME: path.join(DIRS.bridge, "home") };
   }
 
   async installBrowser(signal) {
-    // Betterwright's own browser is built for macOS on Apple silicon and Linux on x86_64.
-    if (!IS_MAC && ARCH !== "x64") throw new Error("The Web helper's browser isn't available for Linux on ARM yet.");
+    // Betterwright's own browser is built for macOS on Apple silicon and Linux/Windows on x86_64.
+    if (!IS_MAC && ARCH !== "x64") throw new Error(`The Web helper's browser isn't available for ${IS_WIN ? "Windows" : "Linux"} on ARM yet.`);
     for (const file of ["server.mjs", "package.json"]) {
       fs.copyFileSync(path.join(ROOT, "bridge", file), path.join(DIRS.bridge, file));
     }
     const env = this.nodeEnv;
     this.set("browser", { status: "installing", text: "Installing Betterwright…" });
-    await run("npm", ["install", "--no-audit", "--no-fund"], { cwd: DIRS.bridge, env, signal, timeout: 900_000 });
+    await run(IS_WIN ? "npm.cmd" : "npm", ["install", "--no-audit", "--no-fund"], { cwd: DIRS.bridge, env, signal, timeout: 900_000 });
     this.set("browser", { status: "installing", text: "Downloading its browser…" });
-    await run("npx", ["betterwright", "setup"], { cwd: DIRS.bridge, env, signal, timeout: 900_000 });
+    await run(IS_WIN ? "npx.cmd" : "npx", ["betterwright", "setup"], { cwd: DIRS.bridge, env, signal, timeout: 900_000 });
     fs.writeFileSync(marker(DIRS.bridge), "");
   }
 
@@ -839,7 +856,7 @@ class Backends {
       }
       case "guardian":
         return {
-          cmd: path.join(DIRS.guardian, ".venv", "bin", "python"),
+          cmd: path.join(DIRS.guardian, ".venv", IS_WIN ? "Scripts" : "bin", IS_WIN ? "python.exe" : "python"),
           args: ["-I", path.join(ROOT, "guardian", "server.py"), "--repo", GUARDIAN_MODEL, "--port", port],
           cwd: DIRS.guardian,
           env: { ...this.pythonEnv, HF_HUB_OFFLINE: "1" },
@@ -889,6 +906,7 @@ class Backends {
       cwd: spec.cwd,
       env: { ...process.env, ...spec.env },
       stdio: ["ignore", log, log],
+      windowsHide: true,
     });
     fs.closeSync(log);
     this.procs[id] = child;
