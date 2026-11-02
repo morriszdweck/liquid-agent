@@ -125,6 +125,8 @@ export function VoiceView({ chatId }: { chatId?: string }) {
       switch (msg.type) {
         case "ready": {
           setCameraAvailable(msg.cameraAvailable === true);
+          if (msg.toolsSupported === false) setError(t("voice.toolsUnavailable"));
+          else if (msg.configurationConfirmed === false) setError(t("voice.configurationUnconfirmed"));
           setSessionChat(msg.chatId);
           if (msg.chatId !== chatId) history.replaceState(null, "", `#/voice/${msg.chatId}`);
           s.player = new Player(msg.outputRate);
@@ -166,6 +168,11 @@ export function VoiceView({ chatId }: { chatId?: string }) {
           setPhase("listening");
           break;
         }
+        case "audio.format":
+          s.player?.close();
+          s.player = new Player(msg.rate);
+          await s.player.resume();
+          break;
         case "state":
           if (msg.state === "listening") streaming = false;
           setPhase((p) => (p === "hearing" && msg.state === "listening" ? p : msg.state));

@@ -219,6 +219,13 @@ function Voice({ settings }: { settings: SettingsType }) {
     <>
       <h3>{t("settings.tab.voice")}</h3>
       <p className="muted">{t("settings.voiceIntro", { device: deviceName() })}</p>
+      <Row title={t("settings.voiceCallMode")} detail={t("settings.voiceCallModeDetail")}>
+        <select className="input" value={settings.voiceCallMode ?? "realtime"} onChange={(e) => patch({ voiceCallMode: e.target.value as "realtime" | "highQuality" })}>
+          <option value="realtime">{t("settings.voiceModeRealtime")}</option>
+          <option value="highQuality">{t("settings.voiceModeQuality")}</option>
+        </select>
+      </Row>
+      <p className="muted">{settings.voiceCallMode === "highQuality" ? t("settings.voiceQualityEffective", { language: settings.realtimeLanguage !== "auto" ? settings.realtimeLanguage : settings.language, voice: settings.voice }) : t("settings.voiceRealtimeEffective", { language: settings.realtimeLanguage !== "auto" ? settings.realtimeLanguage : settings.language })}</p>
       <Row title={t("settings.voice")} detail={t("settings.readAloudVoiceDetail")}>
         <Segmented
           size="sm"
@@ -233,17 +240,17 @@ function Voice({ settings }: { settings: SettingsType }) {
           {speaking ? <Square size={12} fill="currentColor" /> : <Volume2 size={14} />} {speaking ? t("common.stop") : t("settings.hearIt")}
         </button>
       </Row>
-      <Row title={t("settings.ttsLanguage")} detail={t("settings.ttsLanguageDetail")}>
+      <Row title={t("settings.ttsLanguage")} detail={t("settings.ttsLanguageDetail") + " " + t("settings.ttsCallNote")}>
         <select className="input" value={settings.ttsLanguage ?? "auto"} onChange={(e) => patch({ ttsLanguage: e.target.value })}>
           {[["auto", t("settings.ttsAuto")], ["default", t("settings.ttsDefault")], ["ar", "العربية"], ["da", "Dansk"], ["de", "Deutsch"], ["el", "Ελληνικά"], ["en", "English (US)"], ["en-gb", "English (UK)"], ["es", "Español"], ["fi", "Suomi"], ["fr", "Français"], ["he", "עברית"], ["it", "Italiano"], ["ja", "日本語"], ["ko", "한국어"], ["nl", "Nederlands"], ["pl", "Polski"], ["pt", "Português"], ["sv", "Svenska"], ["tr", "Türkçe"], ["zh", "中文"]].map(([code, label]) => <option key={code} value={code}>{label}</option>)}
         </select>
       </Row>
-      <Row title={t("settings.asrLanguage")} detail={t("settings.asrLanguageDetail")}>
+      <Row title={t("settings.asrLanguage")} detail={settings.voiceCallMode === "highQuality" ? t("settings.asrQualityDetail") : t("settings.asrLanguageDetail") + " " + t("settings.asrCallAuto")}>
         <select className="input" value={settings.asrLanguage ?? "auto"} onChange={(e) => patch({ asrLanguage: e.target.value })}>
           {[["auto", t("settings.realtimeAuto")], ["en", "English"], ["es", "Español"], ["pt", "Português"], ["fr", "Français"], ["de", "Deutsch"], ["it", "Italiano"], ["ja", "日本語"], ["zh", "中文"]].map(([code, label]) => <option key={code} value={code}>{label}</option>)}
         </select>
       </Row>
-      <Row title={t("settings.realtimeLanguage")} detail={t("settings.realtimeLanguageDetail")}>
+      <Row title={t("settings.realtimeLanguage")} detail={settings.voiceCallMode === "highQuality" ? t("settings.callQualityLanguageDetail") : t("settings.realtimeLanguageDetail")}>
         <select className="input" value={settings.realtimeLanguage ?? "auto"} onChange={(e) => patch({ realtimeLanguage: e.target.value })}>
           {[["auto", t("settings.realtimeAuto")], ["en", "English"], ["en-gb", "English (UK)"], ["es", "Español"], ["pt", "Português"], ["fr", "Français"], ["de", "Deutsch"], ["it", "Italiano"], ["ja", "日本語"], ["zh", "中文"]].map(([code, label]) => <option key={code} value={code}>{label}</option>)}
         </select>

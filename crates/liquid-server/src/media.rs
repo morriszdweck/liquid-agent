@@ -342,7 +342,7 @@ pub(crate) const SPEECH_LANGUAGES: &[&str] = &[
     "ko", "nl", "pl", "pt", "sv", "tr", "zh",
 ];
 /// Only use a supported detected language when there is enough text and strong evidence.
-fn detected_speech_language(text: &str) -> Option<&'static str> {
+pub(crate) fn detected_speech_language(text: &str) -> Option<&'static str> {
     if text.chars().filter(|c| c.is_alphabetic()).count() < 20 {
         return None;
     }

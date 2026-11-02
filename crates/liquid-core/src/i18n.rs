@@ -88,6 +88,24 @@ pub fn table(code: &str) -> &'static Strings {
     }
 }
 
+/// Resolve the language of a voice call without treating the interface language as
+/// a speech default. Automatic mode leaves language detection to the model.
+pub fn call_language(settings: &Value) -> &str {
+    ["realtimeLanguage", "language"]
+        .iter()
+        .filter_map(|key| settings[*key].as_str())
+        .find(|language| !language.is_empty() && *language != "auto")
+        .unwrap_or("auto")
+}
+
+/// An explicit ASR choice overrides the call language; otherwise follow it.
+pub fn call_asr_language(settings: &Value) -> &str {
+    settings["asrLanguage"]
+        .as_str()
+        .filter(|language| !language.is_empty() && *language != "auto")
+        .unwrap_or_else(|| call_language(settings))
+}
+
 /// Which language to speak. "auto" follows the user's writing, and the interface language sets the words.
 pub struct Reply {
     pub strings: &'static Strings,
@@ -1169,6 +1187,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn call_language_and_asr_follow_explicit_settings() {
+        let settings =
+            serde_json::json!({"language":"en", "realtimeLanguage":"es", "asrLanguage":"auto"});
+        assert_eq!(super::call_language(&settings), "es");
+        assert_eq!(super::call_asr_language(&settings), "es");
+        let settings =
+            serde_json::json!({"language":"es", "realtimeLanguage":"auto", "asrLanguage":"en"});
+        assert_eq!(super::call_language(&settings), "es");
+        assert_eq!(super::call_asr_language(&settings), "en");
+        assert_eq!(
+            super::call_language(&serde_json::json!({"uiLanguage":"en"})),
+            "auto"
+        );
     }
 
     #[test]

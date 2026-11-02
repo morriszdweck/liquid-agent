@@ -27,6 +27,7 @@ fn wire(
     offer_tools: bool,
     browser: bool,
     vision: bool,
+    voice: bool,
 ) -> Vec<Value> {
     let messages = chat
         .get("messages")
@@ -48,7 +49,7 @@ fn wire(
         s.persona.to_owned(),
         reply.directive(),
         personality.to_owned(),
-        s.markdown.to_owned(),
+        if voice { "Your reply will be spoken aloud. Use natural conversational text; avoid Markdown and emoji.".to_owned() } else { s.markdown.to_owned() },
     ]
     .into_iter()
     .filter(|part| !part.is_empty())
@@ -333,12 +334,21 @@ pub(crate) fn needs_omni(app: &App, target: Option<&str>, input: &Value, action:
 }
 
 pub fn send(app: &App, target: Option<&str>, input: &Value) -> Response {
-    submit(app, target, input, "send")
+    submit(app, target, input, "send", None)
 }
 pub fn revise(app: &App, id: &str, input: &Value, action: &str) -> Response {
-    submit(app, Some(id), input, action)
+    submit(app, Some(id), input, action, None)
 }
-fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Response {
+pub(crate) fn send_voice(app: &App, target: &str, input: &Value, language: &str) -> Response {
+    submit(app, Some(target), input, "send", Some(language))
+}
+fn submit(
+    app: &App,
+    target: Option<&str>,
+    input: &Value,
+    action: &str,
+    voice_language: Option<&str>,
+) -> Response {
     let Some(model_use) = app.backends.begin_model_use() else {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -370,7 +380,19 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
     if action == "send" && text.is_empty() && files.is_empty() {
         return error(StatusCode::BAD_REQUEST, "Type a message first.");
     }
-    let settings = app.settings.lock().unwrap().clone();
+    let mut settings = app.settings.lock().unwrap().clone();
+    if let Some(language) = voice_language {
+        settings["language"] = json!(if language == "en-gb" { "en" } else { language });
+    }
+    // Hold the call reservation lock until this turn is registered so a voice
+    // session cannot claim the chat between the check and insertion.
+    let voice_chats = app.voice_chats.lock().unwrap();
+    if voice_language.is_none() && target.is_some_and(|id| voice_chats.contains(id)) {
+        return error(
+            StatusCode::CONFLICT,
+            "That chat is already active in a voice call.",
+        );
+    }
     let mut running = app.running.lock().unwrap();
     if target.is_some_and(|id| running.contains_key(id)) {
         return error(
@@ -399,9 +421,13 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
     };
     let first = messages.is_empty();
     match action {
-        "send" => messages.push(
-            json!({"id":store::id(),"role":"user","content":text,"attachments":files,"at":now()}),
-        ),
+        "send" => {
+            let mut message = json!({"id":store::id(),"role":"user","content":text,"attachments":files,"at":now()});
+            if voice_language.is_some() {
+                message["voice"] = json!(true);
+            }
+            messages.push(message);
+        }
         "edit" => {
             let id = input["messageId"].as_str().unwrap_or("");
             let Some(index) = messages
@@ -466,7 +492,7 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
             "No model is running yet. Open Settings → Downloads to set one up.",
         );
     };
-    if model == "omni" && app.omni_slots_busy() {
+    if model == "omni" && app.omni_slots_busy() && voice_language.is_none() {
         return error(
             StatusCode::CONFLICT,
             "Omni is busy with a voice call. End the call or configure another Omni slot.",
@@ -494,7 +520,11 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
         );
     }
     let reply_id = store::id();
-    messages.push(json!({"id":reply_id,"role":"assistant","content":"","steps":[],"status":"streaming","at":now(),"model":model}));
+    let mut reply = json!({"id":reply_id,"role":"assistant","content":"","steps":[],"status":"streaming","at":now(),"model":model});
+    if voice_language.is_some() {
+        reply["voice"] = json!(true);
+    }
+    messages.push(reply);
     if first && chat.get("named").and_then(Value::as_bool) != Some(true) {
         let title = text
             .split_whitespace()
@@ -524,11 +554,12 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
     let active: Vec<String> = running.keys().cloned().collect();
     drop(chats);
     drop(running);
+    drop(voice_chats);
     app.emit(json!({"type":"running","running":active}));
     app.emit(json!({"type":"chat","chat":chat}));
     let app = app.clone();
     let facts = app.memory.lock().unwrap().clone();
-    let offer_tools = wants_tools(&text, &chat);
+    let offer_tools = voice_language.is_some() || wants_tools(&text, &chat);
     let request_text = text.to_owned();
     let browser = crate::backends::browser_available(&app);
     let vision = crate::backends::omni_available(&app);
@@ -553,6 +584,7 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
         offer_tools,
         browser,
         vision,
+        voice_language.is_some(),
     );
     tokio::spawn(async move {
         respond(
@@ -820,6 +852,7 @@ mod tests {
                 &[],
                 &serde_json::Map::new(),
                 std::path::Path::new("."),
+                false,
                 false,
                 false,
                 false,

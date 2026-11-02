@@ -64,6 +64,7 @@ struct App {
     events: tokio::sync::broadcast::Sender<String>,
     update: Arc<updater::Updater>,
     voice_calls: Arc<std::sync::atomic::AtomicUsize>,
+    voice_chats: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl App {
@@ -108,13 +109,13 @@ impl App {
 }
 
 fn defaults(home: &str) -> Value {
-    json!({"userName":"", "language":"auto", "uiLanguage":"en", "personality":"friendly", "approvalMode":"askAlways", "theme":"system", "voice":"female", "ttsLanguage":"auto", "realtimeLanguage":"auto", "asrLanguage":"auto", "verifySpeech":false, "speakReplies":false, "autoUpdate":true, "workspace":home, "guardianThreshold":0.5, "contextBudget":6000, "modelContext":16384, "omniSlots":1, "promptCacheMiB":256, "idleSleepMinutes":0, "gpuLayers":99, "startupMode":"auto", "toolOutputLimit":1200, "maxSteps":8, "temperature":0.3, "smallQuant":"Q4_K_M", "omniQuant":"Q4_K_M", "omniProjector":"Q8_0", "smallURL":"http://127.0.0.1:8180/v1", "omniURL":"http://127.0.0.1:8181/v1", "guardianURL":"http://127.0.0.1:8766", "browserURL":"http://127.0.0.1:8767"})
+    json!({"userName":"", "language":"auto", "uiLanguage":"en", "personality":"friendly", "approvalMode":"askAlways", "theme":"system", "voice":"female", "voiceCallMode":"realtime", "ttsLanguage":"auto", "realtimeLanguage":"auto", "asrLanguage":"auto", "verifySpeech":false, "speakReplies":false, "autoUpdate":true, "workspace":home, "guardianThreshold":0.5, "contextBudget":6000, "modelContext":16384, "omniSlots":1, "promptCacheMiB":256, "idleSleepMinutes":0, "gpuLayers":99, "startupMode":"auto", "toolOutputLimit":1200, "maxSteps":8, "temperature":0.3, "smallQuant":"Q4_K_M", "omniQuant":"Q4_K_M", "omniProjector":"Q8_0", "smallURL":"http://127.0.0.1:8180/v1", "omniURL":"http://127.0.0.1:8181/v1", "guardianURL":"http://127.0.0.1:8766", "browserURL":"http://127.0.0.1:8767"})
 }
 fn choices() -> Value {
     let codes: Vec<&str> = liquid_core::i18n::CODES.to_vec();
     let mut languages = vec!["auto"];
     languages.extend(codes.iter().copied());
-    json!({"language":languages, "uiLanguage":codes, "personality":["friendly","concise","playful","professional"], "approvalMode":["askAlways","approveForMe","fullAuto"], "theme":["system","light","dark"], "voice":["female","male"], "ttsLanguage":media::SPEECH_LANGUAGES, "realtimeLanguage":["auto","en","en-gb","es","pt","fr","de","it","ja","zh"], "asrLanguage":["auto","en","es","pt","fr","de","it","ja","zh"], "modelContext":[8192,16384,32768], "omniSlots":[1,2], "promptCacheMiB":[0,256,1024,8192], "idleSleepMinutes":[0,5,15,30], "gpuLayers":[0,16,99], "startupMode":["auto","hybrid","dual","single-omni"], "smallQuant":["QAD-Q4_0","Q4_K_M","Q5_K_M","Q6_K","Q8_0","F16"], "omniQuant":["Q4_0","Q4_K_M","Q8_0","F16"], "omniProjector":["Q4_K_M","Q8_0"]})
+    json!({"language":languages, "uiLanguage":codes, "personality":["friendly","concise","playful","professional"], "approvalMode":["askAlways","approveForMe","fullAuto"], "theme":["system","light","dark"], "voice":["female","male"], "voiceCallMode":["realtime","highQuality"], "ttsLanguage":media::SPEECH_LANGUAGES, "realtimeLanguage":["auto","en","en-gb","es","pt","fr","de","it","ja","zh"], "asrLanguage":["auto","en","es","pt","fr","de","it","ja","zh"], "modelContext":[8192,16384,32768], "omniSlots":[1,2], "promptCacheMiB":[0,256,1024,8192], "idleSleepMinutes":[0,5,15,30], "gpuLayers":[0,16,99], "startupMode":["auto","hybrid","dual","single-omni"], "smallQuant":["QAD-Q4_0","Q4_K_M","Q5_K_M","Q6_K","Q8_0","F16"], "omniQuant":["Q4_0","Q4_K_M","Q8_0","F16"], "omniProjector":["Q4_K_M","Q8_0"]})
 }
 fn response(status: StatusCode, content_type: &'static str, data: impl Into<Body>) -> Response {
     Response::builder()
@@ -736,6 +737,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         events,
         update: Arc::new(updater::Updater::new(root)),
         voice_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        voice_chats: Arc::new(Mutex::new(std::collections::HashSet::new())),
     };
     if wanted || outdated {
         let _ = installer::enqueue(&app, &[json!("guardian")]);

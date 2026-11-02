@@ -258,6 +258,16 @@ pub async fn chats(app: &App, request: Request, path: &str) -> Response {
         prepare_chat(app, None, &input, "send").await;
         return crate::chat::send(app, None, &input);
     }
+    let voice_chats = app.voice_chats.lock().unwrap();
+    if method == Method::DELETE
+        && id.is_none_or(|id| voice_chats.contains(id))
+        && !voice_chats.is_empty()
+    {
+        return json_response(
+            StatusCode::CONFLICT,
+            json!({"error":"End the voice call before deleting its chat."}),
+        );
+    }
     let running = app.running.lock().unwrap();
     let mut current = app.chats.lock().unwrap();
     let mut next = current.clone();

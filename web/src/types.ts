@@ -113,6 +113,7 @@ export type Settings = {
   approvalMode: ApprovalMode;
   theme: "system" | "light" | "dark";
   voice: "female" | "male";
+  voiceCallMode: "realtime" | "highQuality";
   ttsLanguage: string;
   realtimeLanguage: string;
   asrLanguage: string;
