@@ -38,13 +38,13 @@ const CUT_FROM_SECONDS: f64 = 12.0;
 /// The length of the stretch that is measured for quietness when choosing a cut.
 const FRAME_SECONDS: f64 = 0.2;
 
-pub(crate) async fn completion(url: &str, audio: &[u8]) -> anyhow::Result<String> {
+pub(crate) async fn completion(url: &str, audio: &[u8], language: &str) -> anyhow::Result<String> {
     let Some((rate, pcm, cuts)) = split_plan(audio) else {
-        return transcribe_piece(url, audio).await;
+        return transcribe_piece(url, audio, language).await;
     };
     let mut parts = Vec::with_capacity(cuts.len());
     for (start, end) in cuts {
-        let text = transcribe_piece(url, &pcm16_wav(&pcm[start..end], rate)).await?;
+        let text = transcribe_piece(url, &pcm16_wav(&pcm[start..end], rate), language).await?;
         if !text.is_empty() {
             parts.push(text);
         }
@@ -52,15 +52,41 @@ pub(crate) async fn completion(url: &str, audio: &[u8]) -> anyhow::Result<String
     Ok(parts.join(" "))
 }
 
-async fn transcribe_piece(url: &str, audio: &[u8]) -> anyhow::Result<String> {
-    complete(url, json!([{"role":"system","content":"Transcribe the speech exactly, in the language that is spoken. Do not translate."},{"role":"user","content":[{"type":"input_audio","input_audio":{"data":BASE64.encode(audio),"format":"wav"}}]}]), transcript_budget(audio)).await
+async fn transcribe_piece(url: &str, audio: &[u8], language: &str) -> anyhow::Result<String> {
+    let prompt = match language {
+        "ar" => "Perform ASR in Arabic.",
+        "da" => "Perform ASR in Danish.",
+        "el" => "Perform ASR in Greek.",
+        "en" | "en-gb" => "Perform ASR in English.",
+        "es" => "Perform ASR in Spanish.",
+        "pt" => "Perform ASR in Portuguese.",
+        "fr" => "Perform ASR in French.",
+        "de" => "Perform ASR in German.",
+        "fi" => "Perform ASR in Finnish.",
+        "he" => "Perform ASR in Hebrew.",
+        "it" => "Perform ASR in Italian.",
+        "ja" => "Perform ASR in Japanese.",
+        "ko" => "Perform ASR in Korean.",
+        "nl" => "Perform ASR in Dutch.",
+        "pl" => "Perform ASR in Polish.",
+        "sv" => "Perform ASR in Swedish.",
+        "tr" => "Perform ASR in Turkish.",
+        "zh" => "Perform ASR in Chinese.",
+        _ => "Perform ASR.",
+    };
+    complete(url, json!([{"role":"system","content":prompt},{"role":"user","content":[{"type":"input_audio","input_audio":{"data":BASE64.encode(audio),"format":"wav"}}]}]), transcript_budget(audio)).await
 }
 
 /// Where a recording is cut, as byte ranges of its PCM data: the sample rate, the data, and the ranges.
 /// None when the clip is short enough to send whole, or isn't 16-bit mono PCM WAV that can be cut.
 fn split_plan(audio: &[u8]) -> Option<(u32, &[u8], Vec<(usize, usize)>)> {
     let format = wav_format(audio)?;
-    if format.channels != 1 || format.bits != 16 || format.rate == 0 {
+    if format.encoding != 1
+        || format.channels != 1
+        || format.bits != 16
+        || format.rate == 0
+        || format.data.len() % 2 != 0
+    {
         return None;
     }
     let rate = format.rate as usize;
@@ -109,6 +135,7 @@ pub(crate) fn plan_cuts(samples: &[i16], rate: usize) -> Vec<(usize, usize)> {
 
 /// A WAV file's format and its PCM data, read from its header.
 pub(crate) struct WavFormat<'a> {
+    pub(crate) encoding: u16,
     pub(crate) rate: u32,
     pub(crate) channels: u16,
     pub(crate) bits: u16,
@@ -125,9 +152,10 @@ pub(crate) fn wav_format(bytes: &[u8]) -> Option<WavFormat<'_>> {
         let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().ok()?) as usize;
         let body = at + 8;
         match id {
-            b"fmt " if body + 16 <= bytes.len() => {
+            b"fmt " if size >= 16 && body + 16 <= bytes.len() => {
                 let field = |offset: usize, len: usize| &bytes[body + offset..body + offset + len];
                 format = Some((
+                    u16::from_le_bytes(field(0, 2).try_into().ok()?),
                     u16::from_le_bytes(field(2, 2).try_into().ok()?),
                     u32::from_le_bytes(field(4, 4).try_into().ok()?),
                     u16::from_le_bytes(field(14, 2).try_into().ok()?),
@@ -139,8 +167,9 @@ pub(crate) fn wav_format(bytes: &[u8]) -> Option<WavFormat<'_>> {
         }
         at = body + size + (size & 1);
     }
-    let (channels, rate, bits) = format?;
+    let (encoding, channels, rate, bits) = format?;
     Some(WavFormat {
+        encoding,
         rate,
         channels,
         bits,
@@ -254,10 +283,35 @@ async fn complete(url: &str, messages: Value, max_tokens: u32) -> anyhow::Result
     Ok(transcript.finish())
 }
 pub async fn transcribe(app: &App, request: Request) -> Response {
-    if !app.backends.running("omni") {
+    let bytes = match to_bytes(request.into_body(), 25 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "That request is too big."),
+    };
+    if bytes.is_empty() {
+        return error(StatusCode::BAD_REQUEST, "The audio is empty.");
+    }
+    if !crate::backends::demand_omni(app).await {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Dictation needs Eyes and ears. Set it up in Settings → Downloads.",
+        );
+    }
+    if app.omni_slots_busy() {
+        return error(
+            StatusCode::CONFLICT,
+            "Omni is busy with a voice call. End the call or configure another Omni slot.",
+        );
+    }
+    let Some(_model_use) = app.backends.begin_model_use() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The model is changing. Try again shortly.",
+        );
+    };
+    if !app.backends.running("omni") {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Eyes and ears is not running.",
         );
     }
     let settings = app.settings.lock().unwrap().clone();
@@ -267,11 +321,13 @@ pub async fn transcribe(app: &App, request: Request) -> Response {
             "Refusing a model address that isn't on this computer.",
         );
     };
-    let bytes = match to_bytes(request.into_body(), 25 * 1024 * 1024).await {
-        Ok(bytes) => bytes,
-        Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "That request is too big."),
-    };
-    match completion(url.as_str(), &bytes).await {
+    match completion(
+        url.as_str(),
+        &bytes,
+        settings["asrLanguage"].as_str().unwrap_or("auto"),
+    )
+    .await
+    {
         Ok(text) => json_response(StatusCode::OK, json!({"text":text})),
         Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
@@ -281,13 +337,32 @@ pub async fn transcribe(app: &App, request: Request) -> Response {
 const SPEECH_TRIES: usize = 3;
 /// How closely the heard words must match the text, from 0 to 1.
 const SPEECH_MATCH: f64 = 0.8;
-pub async fn speak(app: &App, request: Request) -> Response {
-    if !app.backends.running("omni") {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Reading aloud needs Eyes and ears. Set it up in Settings → Downloads.",
-        );
+pub(crate) const SPEECH_LANGUAGES: &[&str] = &[
+    "auto", "default", "ar", "da", "de", "el", "en", "en-gb", "es", "fi", "fr", "he", "it", "ja",
+    "ko", "nl", "pl", "pt", "sv", "tr", "zh",
+];
+/// Only use a supported detected language when there is enough text and strong evidence.
+fn detected_speech_language(text: &str) -> Option<&'static str> {
+    if text.chars().filter(|c| c.is_alphabetic()).count() < 20 {
+        return None;
     }
+    let info = whatlang::detect(text)?;
+    if !info.is_reliable() {
+        return None;
+    }
+    match info.lang() {
+        whatlang::Lang::Eng => Some("en"),
+        whatlang::Lang::Spa => Some("es"),
+        whatlang::Lang::Por => Some("pt"),
+        whatlang::Lang::Fra => Some("fr"),
+        whatlang::Lang::Deu => Some("de"),
+        whatlang::Lang::Ita => Some("it"),
+        whatlang::Lang::Jpn => Some("ja"),
+        whatlang::Lang::Cmn => Some("zh"),
+        _ => None,
+    }
+}
+pub async fn speak(app: &App, request: Request) -> Response {
     let bytes = match to_bytes(request.into_body(), 1_000_000).await {
         Ok(bytes) => bytes,
         Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "That request is too big."),
@@ -300,6 +375,46 @@ pub async fn speak(app: &App, request: Request) -> Response {
             Err(_) => return error(StatusCode::BAD_REQUEST, "Bad JSON."),
         }
     };
+    let text = body["text"]
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .take(1200)
+        .collect::<String>();
+    if text.trim().is_empty() {
+        return error(StatusCode::BAD_REQUEST, "The text is empty.");
+    }
+    if body.get("lang").is_some()
+        && !body["lang"]
+            .as_str()
+            .is_some_and(|lang| SPEECH_LANGUAGES.contains(&lang))
+    {
+        return error(StatusCode::BAD_REQUEST, "Unsupported speech language.");
+    }
+    if !crate::backends::demand_omni(app).await {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Reading aloud needs Eyes and ears. Set it up in Settings → Downloads.",
+        );
+    }
+    if app.omni_slots_busy() {
+        return error(
+            StatusCode::CONFLICT,
+            "Omni is busy with a voice call. End the call or configure another Omni slot.",
+        );
+    }
+    let Some(_model_use) = app.backends.begin_model_use() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The model is changing. Try again shortly.",
+        );
+    };
+    if !app.backends.running("omni") {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Eyes and ears is not running.",
+        );
+    }
     let settings = app.settings.lock().unwrap().clone();
     let Some(url) = local_url(&settings) else {
         return error(
@@ -307,18 +422,37 @@ pub async fn speak(app: &App, request: Request) -> Response {
             "Refusing a model address that isn't on this computer.",
         );
     };
-    let text = body["text"]
-        .as_str()
-        .unwrap_or("")
-        .chars()
-        .take(1200)
-        .collect::<String>();
     let voice = body["voice"]
         .as_str()
         .filter(|v| ["male", "female"].contains(v))
         .or_else(|| settings["voice"].as_str())
         .unwrap_or("female");
-    match speak_checked(&url, &text, voice).await {
+    let lang = body["lang"]
+        .as_str()
+        .unwrap_or_else(|| settings["ttsLanguage"].as_str().unwrap_or("auto"));
+    if !SPEECH_LANGUAGES.contains(&lang) {
+        return error(StatusCode::BAD_REQUEST, "Unsupported speech language.");
+    }
+    let language_context: String = body["languageText"]
+        .as_str()
+        .unwrap_or(&text)
+        .chars()
+        .take(8000)
+        .collect();
+    let lang = match lang {
+        "auto" => detected_speech_language(&text)
+            .or_else(|| detected_speech_language(&language_context))
+            .unwrap_or("auto"),
+        "default" => "auto",
+        other => other,
+    };
+    let verify = settings["verifySpeech"].as_bool().unwrap_or(false);
+    let result = if verify {
+        speak_checked(&url, &text, voice, lang).await
+    } else {
+        synthesize(&url, &text, voice, lang).await
+    };
+    match result {
         Ok(wav) => response(StatusCode::OK, "audio/wav", wav),
         Err(e) => error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
@@ -337,7 +471,12 @@ pub(crate) fn trim_silence(wav: Vec<u8>) -> Vec<u8> {
     let Some(format) = wav_format(&wav) else {
         return wav;
     };
-    if format.channels != 1 || format.bits != 16 || format.rate == 0 {
+    if format.encoding != 1
+        || format.channels != 1
+        || format.bits != 16
+        || format.rate == 0
+        || format.data.len() % 2 != 0
+    {
         return wav;
     }
     let rate = format.rate as usize;
@@ -366,8 +505,16 @@ pub(crate) fn trim_silence(wav: Vec<u8>) -> Vec<u8> {
 }
 
 /// One clip from the model's speech route, in the chosen voice.
-async fn synthesize(url: &url::Url, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
-    let body = json!({"input":text,"voice":voice});
+pub(crate) async fn synthesize(
+    url: &url::Url,
+    text: &str,
+    voice: &str,
+    lang: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut body = json!({"input":text,"voice":voice});
+    if lang != "auto" {
+        body["lang"] = json!(lang);
+    }
     let res = client()?
         .post(format!("{}/tts", url.origin().ascii_serialization()))
         .json(&body)
@@ -392,12 +539,17 @@ async fn synthesize(url: &url::Url, text: &str, voice: &str) -> anyhow::Result<V
 }
 
 /// The clip that sounds closest to the text, made again while it doesn't match.
-async fn speak_checked(url: &url::Url, text: &str, voice: &str) -> anyhow::Result<Vec<u8>> {
+async fn speak_checked(
+    url: &url::Url,
+    text: &str,
+    voice: &str,
+    lang: &str,
+) -> anyhow::Result<Vec<u8>> {
     let mut best: Option<(f64, Vec<u8>)> = None;
     for _ in 0..SPEECH_TRIES {
-        let wav = synthesize(url, text, voice).await?;
+        let wav = synthesize(url, text, voice, lang).await?;
         // If the model can't hear the clip back, there is nothing to check it against: keep it.
-        let score = match completion(url.as_str(), &wav).await {
+        let score = match completion(url.as_str(), &wav, lang).await {
             Ok(heard) => similarity(text, &heard),
             Err(_) => 1.0,
         };
@@ -622,7 +774,13 @@ pub(crate) fn similarity(text: &str, heard: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{similarity, transcript_budget, wav_seconds, Transcript};
+    use super::{detected_speech_language, similarity, transcript_budget, wav_seconds, Transcript};
+    #[test]
+    fn speech_language_detection_requires_enough_supported_text() {
+        assert_eq!(detected_speech_language("Hola"), None);
+        assert_eq!(detected_speech_language("Esta es una frase en español que contiene suficientes palabras para reconocer correctamente el idioma del mensaje completo."), Some("es"));
+        assert_eq!(detected_speech_language("This is an English sentence with enough words to identify the language reliably for the spoken message."), Some("en"));
+    }
 
     /// A 16-bit mono WAV of `seconds` at `rate`, with a header like the ones the app records and plays.
     fn wav(rate: u32, seconds: u32) -> Vec<u8> {
@@ -808,6 +966,23 @@ mod tests {
         let format = super::wav_format(&wav).unwrap();
         assert_eq!((format.rate, format.channels, format.bits), (24000, 1, 16));
         assert_eq!(format.data, &pcm);
+    }
+
+    #[test]
+    fn encoded_or_unaligned_wav_is_not_processed_as_pcm() {
+        let mut encoded = super::pcm16_wav(&vec![0; 48_000], 24_000);
+        encoded[20..22].copy_from_slice(&3u16.to_le_bytes());
+        assert_eq!(super::wav_format(&encoded).unwrap().encoding, 3);
+        assert_eq!(super::trim_silence(encoded.clone()), encoded);
+        assert!(super::split_plan(&encoded).is_none());
+
+        let odd = super::pcm16_wav(&[1, 2, 3], 24_000);
+        assert_eq!(super::trim_silence(odd.clone()), odd);
+        assert!(super::split_plan(&odd).is_none());
+
+        let mut bad_header = super::pcm16_wav(&[1, 2], 24_000);
+        bad_header[16..20].copy_from_slice(&0u32.to_le_bytes());
+        assert!(super::wav_format(&bad_header).is_none());
     }
 
     #[test]

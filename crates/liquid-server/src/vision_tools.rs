@@ -384,7 +384,7 @@ pub async fn execute(
     let result = match name {
         "transcribe_audio" => {
             let bytes = audio(file, &scratch, cancel).await?;
-            tokio::select! {_=cancel.cancelled()=>bail!("Stopped."),r=media::completion(&url,&bytes)=>r?}
+            tokio::select! {_=cancel.cancelled()=>bail!("Stopped."),r=media::completion(&url,&bytes,settings["asrLanguage"].as_str().unwrap_or("auto"))=>r?}
         }
         "look_at_screen" | "look_at_image" => {
             let path = if name == "look_at_screen" {

@@ -55,8 +55,8 @@ export async function transcribe(wav: Blob): Promise<string> {
   return (await res.json()).text ?? "";
 }
 
-export async function speakAudio(text: string, voice?: string, signal?: AbortSignal): Promise<Blob> {
-  const res = await request("POST", "/api/speak", { text, voice }, { signal });
+export async function speakAudio(text: string, voice?: string, signal?: AbortSignal, languageText?: string): Promise<Blob> {
+  const res = await request("POST", "/api/speak", { text, voice, languageText }, { signal });
   return res.blob();
 }
 

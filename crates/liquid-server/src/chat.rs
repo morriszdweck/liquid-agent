@@ -76,10 +76,14 @@ fn wire(
         system.push('\n');
         system.push_str(&s.user_facts.replace("{facts}", &relevant.join("; ")));
     }
-    let budget = settings["contextBudget"]
+    // Leave room for the response and template overhead when a smaller server context is selected.
+    // This is a byte-based estimate; the engine remains authoritative about token limits.
+    let context_limit = settings["modelContext"].as_u64().unwrap_or(16384) as usize;
+    let budget = (settings["contextBudget"]
         .as_u64()
         .unwrap_or(6000)
-        .clamp(256, 16000) as usize
+        .clamp(256, 16000) as usize)
+        .min(context_limit.saturating_sub(2048).max(256))
         * 4;
     let mut used = system.len();
     let mut selected = Vec::new();
@@ -210,7 +214,10 @@ fn wants_tools(request: &str, chat: &Value) -> bool {
     use std::sync::OnceLock;
     static WORDS: OnceLock<regex::Regex> = OnceLock::new();
     let expression = WORDS.get_or_init(|| regex::Regex::new(r"(?i)\b(files?|folders?|desktop|downloads|documents|disk|directory|open|launch|run|command|terminal|shell|install|apps?|mac|linux|computer|search|google|look\s?up|fetch|pages?|web|websites?|site|online|internet|url|links?|browse|browser|click|news|weather|forecast|price|stocks?|score|latest|current|today|tonight|tomorrow|yesterday|now|recent|remind|reminder|remember|forget|recall|clipboard|copy|paste|screen|screenshot|pictures?|images?|photos?|audio|transcribe|listen|see|save|read|list|delete|move|rename|battery|my)\b|[~/]\w|\.[a-z]{2,4}\b").unwrap());
+    static MULTILINGUAL_MEDIA: OnceLock<regex::Regex> = OnceLock::new();
+    let media = MULTILINGUAL_MEDIA.get_or_init(|| regex::Regex::new(r"(?i)\b(pantalla|imagen|imágenes|foto|transcribir|tela|imagem|transcrever|écran|image|photo|transcrire|bildschirm|bild|foto|transkribieren|schermo|immagine|trascrivere)\b|画面|画像|音声|写真|屏幕|图片|图像|语音").unwrap());
     expression.is_match(request)
+        || media.is_match(request)
         || chat
             .get("messages")
             .and_then(Value::as_array)
@@ -275,6 +282,56 @@ fn visible_text(text: &str) -> (&str, bool) {
     (&text[..cut], found)
 }
 
+/// Mirror the last-two-user-message media routing before an asynchronous model warmup.
+pub(crate) fn needs_omni(app: &App, target: Option<&str>, input: &Value, action: &str) -> bool {
+    let mut messages = target
+        .and_then(|id| {
+            app.chats
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|c| c["id"] == id)
+                .and_then(|c| c["messages"].as_array().cloned())
+        })
+        .unwrap_or_default();
+    match action {
+        "send" => {
+            let uploads = app.uploads.lock().unwrap();
+            let files: Vec<Value> = input["attachments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter_map(|id| uploads.get(id).map(uploads::public))
+                .collect();
+            messages.push(json!({"role":"user","attachments":files}));
+        }
+        "edit" => {
+            let Some(index) = messages
+                .iter()
+                .position(|m| m["id"] == input["messageId"] && m["role"] == "user")
+            else {
+                return false;
+            };
+            messages.truncate(index + 1);
+        }
+        "regenerate" => {}
+        _ => return false,
+    }
+    messages
+        .iter()
+        .rev()
+        .filter(|m| m["role"] == "user")
+        .take(2)
+        .any(|m| {
+            m["attachments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|f| matches!(f["kind"].as_str(), Some("image" | "audio")))
+        })
+}
+
 pub fn send(app: &App, target: Option<&str>, input: &Value) -> Response {
     submit(app, target, input, "send")
 }
@@ -282,6 +339,12 @@ pub fn revise(app: &App, id: &str, input: &Value, action: &str) -> Response {
     submit(app, Some(id), input, action)
 }
 fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Response {
+    let Some(model_use) = app.backends.begin_model_use() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The model is changing. Try again shortly.",
+        );
+    };
     let mut text = input
         .get("text")
         .and_then(Value::as_str)
@@ -403,6 +466,12 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
             "No model is running yet. Open Settings → Downloads to set one up.",
         );
     };
+    if model == "omni" && app.omni_slots_busy() {
+        return error(
+            StatusCode::CONFLICT,
+            "Omni is busy with a voice call. End the call or configure another Omni slot.",
+        );
+    }
     let url = settings[if model == "small" {
         "smallURL"
     } else {
@@ -461,11 +530,22 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
     let facts = app.memory.lock().unwrap().clone();
     let offer_tools = wants_tools(&text, &chat);
     let request_text = text.to_owned();
-    let browser = app.backends.running("browser");
-    let vision = app.backends.running("omni");
+    let browser = crate::backends::browser_available(&app);
+    let vision = crate::backends::omni_available(&app);
+    let mut wire_settings = settings.clone();
+    if let Some(context) = app.backends.running_context(model) {
+        let selected = settings["modelContext"].as_u64().unwrap_or(16384);
+        let mut effective = selected.min(context as u64);
+        if vision {
+            if let Some(omni_context) = app.backends.running_context("omni") {
+                effective = effective.min(omni_context as u64);
+            }
+        }
+        wire_settings["modelContext"] = json!(effective);
+    }
     let messages = wire(
         &chat,
-        &settings,
+        &wire_settings,
         &facts,
         &upload_index,
         &app.data,
@@ -487,6 +567,7 @@ fn submit(app: &App, target: Option<&str>, input: &Value, action: &str) -> Respo
             browser,
             vision,
             request_text,
+            Some(model_use),
         )
         .await;
     });
@@ -507,11 +588,12 @@ async fn respond(
     settings: Value,
     mut messages: Vec<Value>,
     cancel: CancellationToken,
-    model: &'static str,
+    mut model: &'static str,
     offer_tools: bool,
     browser: bool,
     vision: bool,
     request_text: String,
+    mut model_use: Option<std::sync::Arc<crate::backends::ModelUseLease>>,
 ) {
     let started = std::time::Instant::now();
     let mut content = String::new();
@@ -543,7 +625,11 @@ async fn respond(
             if repeats >= 2 { content = "I kept trying the same thing, so I stopped. Could you tell me more about what you want?".into(); return Ok(()); }
             previous.push(call.clone());
             let raw = content.clone();
-            let result = crate::agent_tools::run(&app, &chat_id, &reply_id, &call, &note, &request_text, model, &cancel).await?;
+            let result = crate::agent_tools::run(&app, &chat_id, &reply_id, &call, &note, &request_text, model, Some(&mut model_use), &cancel).await?;
+            if model == "small" && !app.backends.running("small") {
+                anyhow::ensure!(app.backends.running("omni") && crate::media::local_url(&settings).is_some(), "The model could not continue after the multimodal tool.");
+                model = "omni";
+            }
             messages.push(json!({"role":"assistant","content":raw}));
             messages.push(json!({"role":"user","content":format!("[result]\n{result}")}));
         }
@@ -569,6 +655,7 @@ async fn respond(
             .and_then(|m| m.iter_mut().find(|m| m["id"] == reply_id))
         {
             reply["status"] = json!(status);
+            reply["model"] = json!(model);
             let (answer, leaked) = split_thinking(&content);
             reply["content"] = json!(answer.trim());
             let thinking = if reasoning.trim().is_empty() {
@@ -717,7 +804,55 @@ async fn stream(
 
 #[cfg(test)]
 mod tests {
-    use super::split_thinking;
+    use super::{split_thinking, wants_tools, wire};
+
+    #[test]
+    fn smaller_context_limits_estimated_chat_history() {
+        let messages: Vec<_> = (0..6)
+            .map(|i| serde_json::json!({"role":"user", "content":format!("turn {i} {}", "a".repeat(8000))}))
+            .collect();
+        let chat = serde_json::json!({"messages":messages});
+        let settings = |context| serde_json::json!({"contextBudget":16000, "modelContext":context});
+        let history = |context| {
+            wire(
+                &chat,
+                &settings(context),
+                &[],
+                &serde_json::Map::new(),
+                std::path::Path::new("."),
+                false,
+                false,
+                false,
+                false,
+            )
+        };
+        let small = history(8192);
+        let large = history(32768);
+        assert!(
+            small.last().unwrap()["content"].as_str().unwrap().len()
+                < large.last().unwrap()["content"].as_str().unwrap().len()
+        );
+        assert!(small.last().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .contains("turn 5"));
+    }
+
+    #[test]
+    fn offers_media_tools_for_common_multilingual_requests() {
+        let chat = serde_json::json!({"messages":[]});
+        for request in [
+            "Mira mi pantalla",
+            "Descreva a imagem",
+            "Décris mon écran",
+            "Was zeigt der Bildschirm?",
+            "Guarda lo schermo",
+            "画面を見て",
+            "看看屏幕",
+        ] {
+            assert!(wants_tools(request, &chat), "{request}");
+        }
+    }
 
     #[test]
     fn splits_thinking_that_a_template_left_in_the_text() {

@@ -159,6 +159,9 @@ pub async fn run(app: &App, id: &str, scheduled: bool) -> Response {
         }
     }
     let prompt = routine["prompt"].as_str().unwrap_or("");
+    if !app.backends.running("small") && !app.backends.running("omni") {
+        crate::backends::demand_omni(app).await;
+    }
     let response = chat::send(app, None, &json!({"text":prompt}));
     if !response.status().is_success() {
         return response;

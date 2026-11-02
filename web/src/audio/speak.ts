@@ -31,7 +31,7 @@ export async function speak(id: string, markdown: string) {
   // A piece is fetched while the one before it plays. Its handler is attached at once, so a failure
   // during playback is reported when it is awaited, not as an unhandled rejection.
   const fetchPiece = (piece: string) => {
-    const request = speakAudio(piece, voice, mine.signal);
+    const request = speakAudio(piece, voice, mine.signal, text.slice(0, 8000));
     request.catch(() => {});
     return request;
   };

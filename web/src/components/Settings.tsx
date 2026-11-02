@@ -219,7 +219,7 @@ function Voice({ settings }: { settings: SettingsType }) {
     <>
       <h3>{t("settings.tab.voice")}</h3>
       <p className="muted">{t("settings.voiceIntro", { device: deviceName() })}</p>
-      <Row title={t("settings.voice")}>
+      <Row title={t("settings.voice")} detail={t("settings.readAloudVoiceDetail")}>
         <Segmented
           size="sm"
           value={settings.voice}
@@ -233,6 +233,22 @@ function Voice({ settings }: { settings: SettingsType }) {
           {speaking ? <Square size={12} fill="currentColor" /> : <Volume2 size={14} />} {speaking ? t("common.stop") : t("settings.hearIt")}
         </button>
       </Row>
+      <Row title={t("settings.ttsLanguage")} detail={t("settings.ttsLanguageDetail")}>
+        <select className="input" value={settings.ttsLanguage ?? "auto"} onChange={(e) => patch({ ttsLanguage: e.target.value })}>
+          {[["auto", t("settings.ttsAuto")], ["default", t("settings.ttsDefault")], ["ar", "العربية"], ["da", "Dansk"], ["de", "Deutsch"], ["el", "Ελληνικά"], ["en", "English (US)"], ["en-gb", "English (UK)"], ["es", "Español"], ["fi", "Suomi"], ["fr", "Français"], ["he", "עברית"], ["it", "Italiano"], ["ja", "日本語"], ["ko", "한국어"], ["nl", "Nederlands"], ["pl", "Polski"], ["pt", "Português"], ["sv", "Svenska"], ["tr", "Türkçe"], ["zh", "中文"]].map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+        </select>
+      </Row>
+      <Row title={t("settings.asrLanguage")} detail={t("settings.asrLanguageDetail")}>
+        <select className="input" value={settings.asrLanguage ?? "auto"} onChange={(e) => patch({ asrLanguage: e.target.value })}>
+          {[["auto", t("settings.realtimeAuto")], ["en", "English"], ["es", "Español"], ["pt", "Português"], ["fr", "Français"], ["de", "Deutsch"], ["it", "Italiano"], ["ja", "日本語"], ["zh", "中文"]].map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+        </select>
+      </Row>
+      <Row title={t("settings.realtimeLanguage")} detail={t("settings.realtimeLanguageDetail")}>
+        <select className="input" value={settings.realtimeLanguage ?? "auto"} onChange={(e) => patch({ realtimeLanguage: e.target.value })}>
+          {[["auto", t("settings.realtimeAuto")], ["en", "English"], ["en-gb", "English (UK)"], ["es", "Español"], ["pt", "Português"], ["fr", "Français"], ["de", "Deutsch"], ["it", "Italiano"], ["ja", "日本語"], ["zh", "中文"]].map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+        </select>
+      </Row>
+      <Row title={t("settings.verifySpeech")} detail={t("settings.verifySpeechDetail")}><Toggle checked={settings.verifySpeech} onChange={(verifySpeech) => patch({ verifySpeech })} /></Row>
       <Row title={t("settings.readAloud")} detail={t("settings.readAloudDetail")}>
         <Toggle checked={settings.speakReplies} onChange={(speakReplies) => patch({ speakReplies })} />
       </Row>
@@ -301,7 +317,7 @@ export function PartRow({ part }: { part: Part }) {
       <span className="part-icon">{PART_ICONS[part.id]}</span>
       <div className="part-text">
         <div className="part-title">
-          {part.title} <span className="muted small">· {part.size}</span>
+          {part.title} <span className="muted small">· {part.size}{part.version ? ` · ${part.version}` : ""}</span>
         </div>
         <div className="part-detail">{part.detail}</div>
         {part.quants && (
@@ -330,7 +346,7 @@ export function PartRow({ part }: { part: Part }) {
           </label>
         )}
         <div className={cx("part-status", part.status === "failed" && "bad")}>
-          <StatusDot tone={part.queued ? "busy" : tone} /> {note}
+          <StatusDot tone={part.queued ? "busy" : tone} /> {note}{part.deviceFallback === "cpu" && (part.status === "running" || part.status === "starting") ? ` · ${t("part.cpuFallback")}` : ""}
         </div>
         {part.status === "installing" && <Progress value={part.fraction} />}
       </div>
@@ -545,8 +561,45 @@ function Advanced({ settings }: { settings: SettingsType }) {
     <>
       <h3>{t("settings.tab.advanced")}</h3>
       <EverydayModel />
+      <ResourceDiagnostics />
+      <CapabilityDiagnostics />
       <Row title={t("advanced.context")} detail={t("advanced.contextDetail")}>
         <SavedInput type="number" width={110} value={String(settings.contextBudget)} onSave={num("contextBudget", 1000, 14000)} />
+      </Row>
+      <Row title={t("advanced.startupMode")} detail={`${t("advanced.startupModeDetail")} ${t("advanced.startupWarmup")} ${t("advanced.startupHybridDetail")}`}>
+        <select className="input" value={settings.startupMode ?? "auto"} onChange={(e) => patch({ startupMode: e.target.value as SettingsType["startupMode"] })}>
+          <option value="auto">{t("advanced.startupAuto")}</option><option value="hybrid">{t("advanced.startupHybrid")}</option><option value="dual">{t("advanced.startupDual")}</option><option value="single-omni">{t("advanced.startupSingle")}</option>
+        </select>
+      </Row>
+      <Row title={t("advanced.projector")} detail={t("advanced.projectorDetail")}>
+        <select className="input" value={settings.omniProjector ?? "Q8_0"} onChange={(e) => patch({ omniProjector: e.target.value as SettingsType["omniProjector"] })}>
+          <option value="Q8_0">Q8_0 · ~507 MB</option><option value="Q4_K_M">Q4_K_M · ~292 MB</option>
+        </select>
+      </Row>
+      <Row title={t("advanced.cacheLimit")} detail={t("advanced.cacheLimitDetail")}>
+        <select className="input" value={settings.promptCacheMiB ?? 256} onChange={(e) => patch({ promptCacheMiB: Number(e.target.value) })}>
+          <option value={0}>0 MiB</option><option value={256}>256 MiB</option><option value={1024}>1,024 MiB</option><option value={8192}>8,192 MiB</option>
+        </select>
+      </Row>
+      <Row title={t("advanced.idleSleep")} detail={t("advanced.idleSleepDetail")}>
+        <select className="input" value={settings.idleSleepMinutes ?? 0} onChange={(e) => patch({ idleSleepMinutes: Number(e.target.value) })}>
+          <option value={0}>{t("advanced.idleSleepOff")}</option><option value={5}>5 min</option><option value={15}>15 min</option><option value={30}>30 min</option>
+        </select>
+      </Row>
+      <Row title={t("advanced.gpuLayers")} detail={t("advanced.gpuLayersDetail")}>
+        <select className="input" value={settings.gpuLayers ?? 99} onChange={(e) => patch({ gpuLayers: Number(e.target.value) })}>
+          <option value={0}>0</option><option value={16}>16</option><option value={99}>{t("advanced.gpuLayersAll")}</option>
+        </select>
+      </Row>
+      <Row title={t("advanced.modelContext")} detail={t("advanced.modelContextDetail")}>
+        <select className="input" value={settings.modelContext ?? 16384} onChange={(e) => patch({ modelContext: Number(e.target.value) })}>
+          <option value={8192}>8,192</option><option value={16384}>16,384</option><option value={32768}>32,768</option>
+        </select>
+      </Row>
+      <Row title={t("advanced.omniSlots")} detail={t("advanced.omniSlotsDetail")}>
+        <select className="input" value={settings.omniSlots ?? 1} onChange={(e) => patch({ omniSlots: Number(e.target.value) as 1 | 2 })}>
+          <option value={1}>1</option><option value={2}>2</option>
+        </select>
       </Row>
       <Row title={t("advanced.toolOutput")} detail={t("advanced.toolOutputDetail")}>
         <SavedInput type="number" width={110} value={String(settings.toolOutputLimit)} onSave={num("toolOutputLimit", 500, 20000)} />
@@ -564,6 +617,42 @@ function Advanced({ settings }: { settings: SettingsType }) {
       </Row>
     </>
   );
+}
+
+type Diagnostics = {
+  system: { availableBytes: number | null; swapTotalBytes: number | null; swapFreeBytes: number | null };
+  processes: Record<string, { pid: number; rssBytes?: number | null; pssBytes?: number | null; privateBytes?: number | null; swapBytes?: number | null }>;
+  engineProperties: Record<string, { build?: string | null; sleeping?: boolean | null; slots?: number | null; context?: number | null } | null>;
+};
+
+function ResourceDiagnostics() {
+  const [data, setData] = useState<Diagnostics | null>(null);
+  const mib = (bytes?: number | null) => bytes == null ? "—" : `${(bytes / 1048576).toFixed(0)} MiB`;
+  return <Row title={t("advanced.resources")} detail={t("advanced.resourcesDetail")}>
+    <button className="btn" onClick={() => api<Diagnostics>("GET", "/api/diagnostics").then(setData, errorToast)}>{t("advanced.resourcesRefresh")}</button>
+    {data && <div className="muted small">
+      <div>{t("advanced.available")}: {mib(data.system.availableBytes)} · {t("advanced.swap")}: {data.system.swapTotalBytes == null || data.system.swapFreeBytes == null ? "—" : mib(data.system.swapTotalBytes - data.system.swapFreeBytes)}</div>
+      {Object.entries(data.processes).map(([id,p]) => <div key={id}>{id} ({p.pid}): PSS {mib(p.pssBytes)} · RSS {mib(p.rssBytes)} · {t("advanced.privateMemory")} {mib(p.privateBytes)} · {t("advanced.swap")} {mib(p.swapBytes)}</div>)}
+      {Object.entries(data.engineProperties).filter(([,p]) => p != null).map(([id,p]) => <div key={id}>{id}: {p?.build ?? "—"} · {t("advanced.engineContext")}: {p?.context ?? "—"} · {t("advanced.engineSlots")}: {p?.slots ?? "—"} · {t("advanced.engineSleeping")}: {p?.sleeping == null ? "—" : p.sleeping ? t("settings.on") : t("advanced.idleSleepOff")}</div>)}
+    </div>}
+  </Row>;
+}
+
+function CapabilityDiagnostics() {
+  const [result, setResult] = useState<{ spanishWav: boolean; realtimeHandshake: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const running = useStore((s) => s.parts.some((p) => p.id === "omni" && p.status === "running"));
+  const check = async () => {
+    setBusy(true); setResult(null);
+    try { setResult(await api("POST", "/api/capabilities/omni")); } catch (error) { errorToast(error); } finally { setBusy(false); }
+  };
+  return <Row title={t("advanced.capabilities")} detail={t("advanced.capabilitiesDetail")}>
+    <button className="btn" disabled={!running || busy} onClick={check}>{busy ? <Spinner size={14} /> : null} {t("advanced.capabilitiesRun")}</button>
+    {result && <div className="muted small">
+      <div>{t("advanced.capabilitiesSpeech")}: {result.spanishWav ? t("advanced.capabilitiesPassed") : t("advanced.capabilitiesFailed")}</div>
+      <div>{t("advanced.capabilitiesRealtime")}: {result.realtimeHandshake ? t("advanced.capabilitiesPassed") : t("advanced.capabilitiesFailed")}</div>
+    </div>}
+  </Row>;
 }
 
 // ---- First run ----
@@ -610,7 +699,8 @@ function planBytes(parts: Part[], ids: readonly Part["id"][], size: (typeof SIZE
 export function Setup() {
   const { parts, busy, settings, machine } = useStore();
   const memoryGB = machine.memoryGB;
-  const suggested: SizeId = memoryGB >= 16 ? "best" : memoryGB > 0 && memoryGB < 8 ? "small" : "balanced";
+  const availableGB = machine.availableMemoryBytes == null ? null : machine.availableMemoryBytes / (1024 ** 3);
+  const suggested: SizeId = availableGB != null ? (availableGB >= 12 ? "best" : availableGB < 4 ? "small" : "balanced") : memoryGB >= 16 ? "best" : memoryGB > 0 && memoryGB < 8 ? "small" : "balanced";
   const [plan, setPlan] = useState<keyof typeof PLANS>("all");
   const [sizeId, setSizeId] = useState<SizeId>(suggested);
   const [name, setName] = useState(settings?.userName ?? "");
@@ -716,7 +806,7 @@ export function Setup() {
         <div className="size-pick">
           <div className="size-pick-head">
             <span>{t("setup.modelSize")}</span>
-            {memoryGB > 0 && <span className="muted small">{t("setup.memory", { device, gb: memoryGB })}</span>}
+            {memoryGB > 0 && <span className="muted small">{t("setup.memory", { device, gb: memoryGB })}{availableGB != null && ` · ${t("setup.availableMemory", { gb: availableGB.toFixed(1) })}`}</span>}
           </div>
           <div className="size-options">
             {SIZES.map((x) => (

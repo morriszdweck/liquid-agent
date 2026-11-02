@@ -223,10 +223,6 @@ async fn browser(
     args: &Value,
     cancel: &CancellationToken,
 ) -> Result<String> {
-    anyhow::ensure!(
-        app.backends.running("browser"),
-        "The Web helper is not running."
-    );
     let arg = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
     let (action, body) = match name {
         "browser_goto" => (
@@ -239,9 +235,10 @@ async fn browser(
         _ => anyhow::bail!("Unknown browser action."),
     };
     anyhow::ensure!(
-        app.backends.running("browser"),
-        "The Web helper is not running."
+        crate::backends::demand_browser(app, cancel).await,
+        "The Web helper could not be started."
     );
+    anyhow::ensure!(!cancel.is_cancelled(), "Stopped.");
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())

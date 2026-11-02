@@ -180,6 +180,14 @@ fn attachments(chat: &Value) -> Vec<String> {
         .collect()
 }
 
+async fn prepare_chat(app: &App, target: Option<&str>, input: &Value, action: &str) {
+    if !app.backends.running("omni")
+        && (!app.backends.running("small") || crate::chat::needs_omni(app, target, input, action))
+    {
+        crate::backends::demand_omni(app).await;
+    }
+}
+
 pub async fn chats(app: &App, request: Request, path: &str) -> Response {
     let method = request.method().clone();
     if method == Method::POST {
@@ -198,17 +206,24 @@ pub async fn chats(app: &App, request: Request, path: &str) -> Response {
                 }
                 if action == "send" {
                     return match body(request).await {
-                        Ok(input) => crate::chat::send(app, Some(id), &input),
+                        Ok(input) => {
+                            prepare_chat(app, Some(id), &input, "send").await;
+                            crate::chat::send(app, Some(id), &input)
+                        }
                         Err(response) => response,
                     };
                 }
                 if action == "edit" {
                     return match body(request).await {
-                        Ok(input) => crate::chat::revise(app, id, &input, "edit"),
+                        Ok(input) => {
+                            prepare_chat(app, Some(id), &input, "edit").await;
+                            crate::chat::revise(app, id, &input, "edit")
+                        }
                         Err(response) => response,
                     };
                 }
                 if action == "regenerate" {
+                    prepare_chat(app, Some(id), &json!({}), "regenerate").await;
                     return crate::chat::revise(app, id, &json!({}), "regenerate");
                 }
             }
@@ -240,6 +255,7 @@ pub async fn chats(app: &App, request: Request, path: &str) -> Response {
                 .get("attachments")
                 .is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty())))
     {
+        prepare_chat(app, None, &input, "send").await;
         return crate::chat::send(app, None, &input);
     }
     let running = app.running.lock().unwrap();

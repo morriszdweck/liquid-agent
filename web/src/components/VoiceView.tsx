@@ -42,12 +42,13 @@ export function VoiceView({ chatId }: { chatId?: string }) {
   const [typing, setTyping] = useState(false);
   const [typed, setTyped] = useState("");
   const [video, setVideo] = useState(false);
+  const [cameraAvailable, setCameraAvailable] = useState(false);
   const [sessionChat, setSessionChat] = useState<string | undefined>(chatId);
   const hasTranscript = useStore((s) => s.chats.some((c) => c.id === sessionChat && c.messages.length > 0));
   const orb = useRef<HTMLDivElement>(null);
   const preview = useRef<HTMLVideoElement>(null);
   const session = useRef<Session | null>(null);
-  const ready = omni?.status === "running";
+  const ready = omni?.status === "running" || !!omni?.onDemand;
 
   function end() {
     const s = session.current;
@@ -123,6 +124,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
       const msg = JSON.parse(event.data);
       switch (msg.type) {
         case "ready": {
+          setCameraAvailable(msg.cameraAvailable === true);
           setSessionChat(msg.chatId);
           if (msg.chatId !== chatId) history.replaceState(null, "", `#/voice/${msg.chatId}`);
           s.player = new Player(msg.outputRate);
@@ -264,6 +266,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
           {phase === "connecting" && <Spinner size={14} />}
           {muted && live ? t("voice.muted") : t(PHASE_KEY[phase])}
         </div>
+        {live && !cameraAvailable && <div className="muted small">{t("voice.cameraNeedsSlots")}</div>}
         {tool && (
           <div className="voice-tool">
             {tool.status === "running" || tool.status === "pending" ? <Spinner size={12} /> : <Wrench size={13} />}
@@ -302,8 +305,9 @@ export function VoiceView({ chatId }: { chatId?: string }) {
               <button
                 className={cx("voice-btn", video && "on")}
                 onClick={toggleVideo}
+                disabled={!cameraAvailable}
                 aria-label={video ? t("voice.cameraOff") : t("voice.cameraOn")}
-                title={video ? t("voice.cameraOff") : t("voice.cameraHint")}
+                title={!cameraAvailable ? t("voice.cameraNeedsSlots") : video ? t("voice.cameraOff") : t("voice.cameraHint")}
               >
                 {video ? <Video size={20} /> : <VideoOff size={20} />}
               </button>

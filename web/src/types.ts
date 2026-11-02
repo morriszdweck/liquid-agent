@@ -55,12 +55,15 @@ export type Part = {
   size: string;
   bytes: number;
   port?: number;
+  version?: string;
   status: PartStatus;
   text?: string;
   fraction?: number;
   error?: string;
   /** Waiting for another download to finish. */
   queued?: boolean;
+  onDemand?: boolean;
+  deviceFallback?: "cpu";
   /** Still answering with its old size while a new size downloads. */
   live?: boolean;
   quant?: string;
@@ -110,16 +113,27 @@ export type Settings = {
   approvalMode: ApprovalMode;
   theme: "system" | "light" | "dark";
   voice: "female" | "male";
+  ttsLanguage: string;
+  realtimeLanguage: string;
+  asrLanguage: string;
+  verifySpeech: boolean;
   speakReplies: boolean;
   autoUpdate: boolean;
   workspace: string;
   guardianThreshold: number;
   contextBudget: number;
+  modelContext: number;
+  omniSlots: 1 | 2;
+  promptCacheMiB: number;
+  idleSleepMinutes: number;
+  gpuLayers: number;
+  startupMode: "auto" | "hybrid" | "dual" | "single-omni";
   toolOutputLimit: number;
   maxSteps: number;
   temperature: number;
   smallQuant: string;
   omniQuant: string;
+  omniProjector: "Q8_0" | "Q4_K_M";
   smallURL: string;
   omniURL: string;
   guardianURL: string;
@@ -176,7 +190,7 @@ export type Snapshot = {
   parts: Part[];
   busy: boolean;
   guardianWanted: boolean;
-  machine: { memoryGB: number };
+  machine: { memoryGB: number; availableMemoryBytes?: number | null };
   memory: string[];
   ideas: { at: number; items: Idea[] };
   routines: Routine[];

@@ -38,12 +38,13 @@ pub(crate) fn hf_base() -> String {
         .trim_end_matches('/')
         .to_owned()
 }
+const ENGINE_TAG: &str = "b12017";
 fn releases_url() -> String {
     std::env::var("LIQUID_AGENT_RELEASES_URL")
         .ok()
         .filter(|s| liquid_core::settings::is_local(s))
         .unwrap_or_else(|| {
-            "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10".into()
+            format!("https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{ENGINE_TAG}")
         })
 }
 fn emit(app: &App) {
@@ -133,6 +134,30 @@ fn store_custom(data: &Path) -> Option<Value> {
         None
     }
 }
+/// New installs remain lazy when the selected policy or approval mode does not need them.
+fn defer_model_start(app: &App, settings: &Value, id: &str, restart: bool) -> bool {
+    if restart {
+        return false;
+    }
+    if id == "guardian" && settings["approvalMode"] != "approveForMe" && !app.guardian_wanted() {
+        return true;
+    }
+    match settings["startupMode"].as_str() {
+        Some("single-omni") => matches!(id, "small" | "omni"),
+        Some("hybrid") => id == "omni" || (id == "small" && app.backends.active("omni")),
+        _ => false,
+    }
+}
+fn schedule_deferred_text(app: &App, settings: &Value, id: &str, deferred: bool, suppressed: bool) {
+    if deferred
+        && !suppressed
+        && id == "small"
+        && settings["startupMode"] == "hybrid"
+        && app.backends.active("omni")
+    {
+        backends::restore_text_when_idle(app.clone());
+    }
+}
 async fn run_queue(app: App, cancel: CancellationToken) {
     loop {
         let id = {
@@ -154,15 +179,47 @@ async fn run_queue(app: App, cancel: CancellationToken) {
         };
         let settings = app.settings.lock().unwrap().clone();
         if backends::installed(&app.data, &settings, &id) {
-            let (restart, suppressed) = {
+            let (restart, mut suppressed) = {
                 let mut state = app.backends.installs.lock().unwrap();
                 (state.restart.remove(&id), state.suppress_start.remove(&id))
             };
+            let _transition = if restart
+                && app.backends.active(&id)
+                && matches!(id.as_str(), "small" | "omni")
+            {
+                app.backends.set(
+                    &app,
+                    &id,
+                    json!({"status":"installing","text":"Waiting for active work…","live":true}),
+                );
+                let Some(guard) = app.backends.transition_lock(&cancel).await else {
+                    app.backends.set(&app, &id, json!({"status":if app.backends.running(&id) {"running"} else {"installed"}}));
+                    break;
+                };
+                Some(guard)
+            } else {
+                None
+            };
+            suppressed |= app
+                .backends
+                .installs
+                .lock()
+                .unwrap()
+                .suppress_start
+                .remove(&id);
             if restart && app.backends.active(&id) {
                 let _ = backends::stop_process(&app, &id).await;
             }
-            if id != "engine" && !suppressed && !app.backends.active(&id) {
-                let _ = backends::action(&app, &id, "start").await;
+            let current_settings = app.settings.lock().unwrap().clone();
+            let deferred = defer_model_start(&app, &current_settings, &id, restart);
+            schedule_deferred_text(&app, &current_settings, &id, deferred, suppressed);
+            if id != "engine"
+                && id != "browser"
+                && !deferred
+                && !suppressed
+                && !app.backends.active(&id)
+            {
+                let _ = backends::automatic_start(&app, &id, false, false).await;
             }
             continue;
         }
@@ -186,19 +243,42 @@ async fn run_queue(app: App, cancel: CancellationToken) {
             app.backends.set(&app,&id,json!({"status":if live {"running"} else if backends::installed(&app.data,&settings,&id){"installed"}else{"missing"}}));
             break;
         }
-        let (restart, suppressed) = {
+        let (restart, mut suppressed) = {
             let mut state = app.backends.installs.lock().unwrap();
             (state.restart.remove(&id), state.suppress_start.remove(&id))
         };
         match result {
             Ok(()) => {
+                let _transition = if restart
+                    && app.backends.active(&id)
+                    && matches!(id.as_str(), "small" | "omni")
+                {
+                    app.backends.set(&app, &id, json!({"status":"installing","text":"Waiting for active work…","live":true}));
+                    let Some(guard) = app.backends.transition_lock(&cancel).await else {
+                        app.backends.set(&app, &id, json!({"status":if app.backends.running(&id) {"running"} else {"installed"}}));
+                        break;
+                    };
+                    Some(guard)
+                } else {
+                    None
+                };
+                suppressed |= app
+                    .backends
+                    .installs
+                    .lock()
+                    .unwrap()
+                    .suppress_start
+                    .remove(&id);
                 if restart && app.backends.active(&id) {
                     let _ = backends::stop_process(&app, &id).await;
                 }
                 app.backends.set(&app, &id, json!({"status":"installed"}));
-                if id != "engine" && !suppressed {
-                    let response = backends::action(&app, &id, "start").await;
-                    if !response.status().is_success() {
+                let current_settings = app.settings.lock().unwrap().clone();
+                let deferred = defer_model_start(&app, &current_settings, &id, restart);
+                schedule_deferred_text(&app, &current_settings, &id, deferred, suppressed);
+                if id != "engine" && id != "browser" && !deferred && !suppressed {
+                    let response = backends::automatic_start(&app, &id, false, false).await;
+                    if response.is_some_and(|response| !response.status().is_success()) {
                         app.backends.set(&app,&id,json!({"status":"failed","error":"The installed part could not be started."}));
                     }
                 }
@@ -371,7 +451,7 @@ async fn install_part(
             }
             let dir = app.data.join("models");
             if id == "omni" {
-                let name = "mmproj-LFM3-Omni-2B-Q8_0.gguf";
+                let name = backends::projector_name(settings).context("Invalid projector size")?;
                 download(
                     app,
                     id,
@@ -414,40 +494,43 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
         && (std::env::var("LIQUID_AGENT_GPU").as_deref() == Ok("vulkan")
             || (std::env::var("LIQUID_AGENT_GPU").as_deref() != Ok("cpu")
                 && Path::new("/dev/dri").is_dir()));
-    let mut chosen = None;
-    for release in releases.as_array().context("Invalid engine release list")? {
-        let assets = release
-            .get("assets")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let find = |suffix: &str| {
-            assets
-                .iter()
-                .find(|a| {
-                    a["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("llama-") && name.ends_with(suffix))
+    anyhow::ensure!(
+        releases["tag_name"] == ENGINE_TAG,
+        "Unexpected llama.cpp release; expected {ENGINE_TAG}."
+    );
+    let assets = releases["assets"]
+        .as_array()
+        .context("Invalid engine release assets")?;
+    let find = |suffix: &str| {
+        assets
+            .iter()
+            .find(|a| {
+                a["name"].as_str().is_some_and(|name| {
+                    name.starts_with(&format!("llama-{ENGINE_TAG}-"))
+                        && name.ends_with(suffix)
+                        && name
+                            .bytes()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
                 })
-                .cloned()
-        };
-        let candidate = if cfg!(target_os = "macos") {
-            find(&mac)
-        } else if want_vulkan {
-            find(&vulkan).or_else(|| find(&cpu))
-        } else {
-            find(&cpu)
-        };
-        if candidate.is_some() {
-            chosen = candidate;
-            break;
-        }
+            })
+            .cloned()
+    };
+    let asset = if cfg!(target_os = "macos") {
+        find(&mac)
+    } else if want_vulkan {
+        find(&vulkan).or_else(|| find(&cpu))
+    } else {
+        find(&cpu)
     }
-    let asset = chosen.context("No llama.cpp build for this computer was found.")?;
+    .context("No compatible build in the pinned llama.cpp release.")?;
     let url = asset["browser_download_url"]
         .as_str()
         .context("Invalid engine download URL")?;
-    let archive = app.data.join("tools/llama.tar.gz");
+    let asset_name = asset["name"]
+        .as_str()
+        .context("Invalid asset name")?
+        .to_owned();
+    let archive = app.data.join("tools").join(&asset_name);
     download(app, "engine", url, &archive, cancel).await?;
     app.backends.set(
         app,
@@ -457,7 +540,7 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
     let stage = app.data.join("engine.installing");
     let data = app.data.clone();
     let token = cancel.clone();
-    let asset_name = asset["name"].as_str().unwrap_or("").to_owned();
+
     let archive_for_extract = archive.clone();
     let extraction = tokio::task::spawn_blocking(move || -> Result<()> {
         if stage.exists() {
@@ -525,6 +608,7 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
                 "cpu"
             },
         )?;
+        std::fs::write(stage.join(".version"), ENGINE_TAG)?;
         std::fs::rename(&stage, &target)?;
         let _ = std::fs::remove_file(&archive_for_extract);
         Ok(())

@@ -26,3 +26,4 @@ regex = "1"
 libc = "0.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+whatlang = "0.18"

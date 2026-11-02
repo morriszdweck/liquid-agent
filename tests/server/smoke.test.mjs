@@ -14,15 +14,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const PORT = Number(process.env.SMOKE_PORT ?? 8199);
-const BASE = `http://127.0.0.1:${PORT}`;
-const GUARDIAN_PORT = Number(process.env.SMOKE_GUARDIAN_PORT ?? 18767);
+let PORT;
+let BASE;
+let GUARDIAN_PORT;
 const MODELS = process.env.LIQUID_TEST_MODELS === "1";
 const HELPERS = process.env.LIQUID_TEST_HELPERS === "1";
 const GUARDIAN = HELPERS || process.env.LIQUID_TEST_GUARDIAN === "1";
@@ -37,16 +38,33 @@ let server;
 let serverExit = null;
 let log = "";
 let token = "";
+let smallPort;
+let omniPort;
+let browserPort;
+
+async function availablePorts(count) {
+  const servers = [];
+  try {
+    for (let i = 0; i < count; i++) {
+      const server = net.createServer();
+      servers.push(server);
+      await new Promise((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
+    }
+    return servers.map((server) => server.address().port);
+  } finally {
+    await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
+  }
+}
 
 function start() {
   const child = spawn(SERVER, [], {
     cwd: ROOT,
-    env: { ...process.env, LIQUID_AGENT_HOME: home, LIQUID_AGENT_PORT: String(PORT), LIQUID_GUARDIAN_PORT: String(GUARDIAN_PORT) },
+    env: { ...process.env, LIQUID_AGENT_HOME: home, LIQUID_AGENT_RUST_HOME: home, LIQUID_AGENT_PORT: String(PORT), LIQUID_AGENT_RUST_PORT: String(PORT), LIQUID_AGENT_SMALL_PORT: String(smallPort), LIQUID_AGENT_OMNI_PORT: String(omniPort), LIQUID_AGENT_BROWSER_PORT: String(browserPort), LIQUID_GUARDIAN_PORT: String(GUARDIAN_PORT) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (d) => (log += d));
   child.stderr.on("data", (d) => (log += d));
-  child.on("exit", (code) => (serverExit = code));
+  child.on("exit", (code) => (serverExit = code ?? -1));
   return child;
 }
 
@@ -134,9 +152,10 @@ function solidPNG(size, [r, g, b]) {
 
 async function up() {
   for (let i = 0; ; i++) {
+    if (serverExit !== null) fail(`the server exited with ${serverExit}`);
     try {
       const health = await (await fetch(`${BASE}/healthz`)).json();
-      if (health.app === "liquid-agent") break;
+      if (health.app === "liquid-agent" && health.pid === server.pid) break;
     } catch {}
     if (i > 60) fail("the server didn't start");
     await sleep(500);
@@ -160,6 +179,11 @@ async function restart() {
 
 beforeAll(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "liquid-agent-smoke-"));
+  const allocated = await availablePorts(5);
+  PORT = Number(process.env.SMOKE_PORT ?? allocated[0]);
+  BASE = `http://127.0.0.1:${PORT}`;
+  GUARDIAN_PORT = Number(process.env.SMOKE_GUARDIAN_PORT ?? allocated[1]);
+  [smallPort, omniPort, browserPort] = allocated.slice(2);
   if (GUARDIAN && process.env.LIQUID_GUARDIAN_FIXTURE) {
     fs.mkdirSync(path.join(home, "guardian"), { recursive: true });
     for (const file of ["config.json", "model.safetensors", "tokenizer.json"]) {
@@ -168,10 +192,13 @@ beforeAll(async () => {
   }
   server = start();
   await up();
+  await call("PATCH", "/api/settings", { smallURL: `http://127.0.0.1:${smallPort}/v1`, omniURL: `http://127.0.0.1:${omniPort}/v1`, guardianURL: `http://127.0.0.1:${GUARDIAN_PORT}`, browserURL: `http://127.0.0.1:${browserPort}` });
 }, 120_000);
 
-afterAll(() => {
-  if (server && serverExit === null) server.kill("SIGTERM");
+afterAll(async () => {
+  if (server && serverExit === null) {
+    await new Promise((resolve) => { server.once("exit", resolve); server.kill("SIGTERM"); });
+  }
   if (home) fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -241,13 +268,26 @@ describe("Rust server smoke test", () => {
   }, 1_200_000);
 
   it.skipIf(!OMNI)("LFM3 Omni 2B speaks, hears its own voice, and sees a picture", async () => {
-    await call("PATCH", "/api/settings", { omniQuant: "Q4_0" });
+    await call("PATCH", "/api/settings", { omniQuant: "Q4_0", startupMode: "single-omni" });
+    const state = await call("GET", "/api/state");
+    if (["running", "starting"].includes(state.parts.find((p) => p.id === "small")?.status)) {
+      await call("POST", "/api/parts/small/stop");
+    }
     await call("POST", "/api/parts/install", { ids: ["engine", "omni"] });
-    await waitFor("LFM3 Omni 2B", (s) => s.parts.find((p) => p.id === "omni" && p.status === "running"), 40);
+    await waitFor("LFM3 Omni 2B installation", (s) => s.parts.find((p) => p.id === "omni" && p.status === "installed" && p.onDemand), 40);
 
     const wav = Buffer.from(await (await send("/api/speak", JSON.stringify({ text: "Hello from Linux." }), "application/json")).arrayBuffer());
     expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
     expect(wav.length, "it reads text aloud").toBeGreaterThan(8000);
+    // These requests exercise the actual model and engine with an explicit locale and both
+    // supported voice parameters. Audio content and accent still require listening tests.
+    for (const voice of ["female", "male"]) {
+      const response = await send("/api/speak", JSON.stringify({text:"Buenos días. ¿Cómo estás?",lang:"es",voice}), "application/json");
+      expect(response.headers.get("content-type")).toContain("audio/wav");
+      const spanish = Buffer.from(await response.arrayBuffer());
+      expect(spanish.toString("ascii", 0, 4)).toBe("RIFF");
+      expect(spanish.length, `Spanish ${voice} audio`).toBeGreaterThan(8000);
+    }
     const heard = await (await send("/api/transcribe", wav, "audio/wav")).json();
     expect(heard.text, "it hears its own voice").toMatch(/hello|linux/i);
 
@@ -263,8 +303,14 @@ describe("Rust server smoke test", () => {
   it.skipIf(!GUARDIAN)("Auto 150M classifies actions, and Approve for Me survives an upgrade", async () => {
     await call("POST", "/api/parts/install", { ids: HELPERS ? ["guardian", "browser"] : ["guardian"] });
     const running = (s, id) => s.parts.find((p) => p.id === id && p.status === "running");
+    await waitFor("Auto 150M installation", (s) => s.parts.find((p) => p.id === "guardian" && p.status === "installed"), 30);
+    await call("POST", "/api/parts/guardian/start");
     await waitFor("Auto 150M", (s) => running(s, "guardian"), 30);
-    if (HELPERS) await waitFor("the Web helper", (s) => running(s, "browser"), 30);
+    if (HELPERS) {
+      await waitFor("the Web helper installation", (s) => s.parts.find((p) => p.id === "browser" && p.status === "installed"), 30);
+      await call("POST", "/api/parts/browser/start");
+      await waitFor("the Web helper", (s) => running(s, "browser"), 30);
+    }
 
     const classified = await fetch(`http://127.0.0.1:${GUARDIAN_PORT}/classify`, {
       method: "POST",

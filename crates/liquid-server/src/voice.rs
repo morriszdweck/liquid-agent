@@ -75,12 +75,27 @@ fn make_chat(app: &App, requested: Option<&str>) -> anyhow::Result<String> {
     app.emit(json!({"type":"chat","chat":chat}));
     Ok(id)
 }
-fn schema(browser: bool) -> Vec<Value> {
-    tools::descriptors(browser, true).as_object().unwrap().iter().map(|(name, desc)| {
+fn schema(browser: bool, vision: bool) -> Vec<Value> {
+    tools::descriptors(browser, vision).as_object().unwrap().iter().map(|(name, desc)| {
         let params=desc["params"].as_array().unwrap(); let properties=params.iter().filter_map(|p|p["name"].as_str()).map(|n|(n.to_owned(),json!({"type":if name=="reminder" && n=="minutes" {"number"}else{"string"}}))).collect::<serde_json::Map<_,_>>();
         let required: Vec<_>=params.iter().filter(|p|p["required"]!=false).filter_map(|p|p["name"].as_str()).collect();
         json!({"type":"function","name":name,"description":name.replace('_'," "),"parameters":{"type":"object","properties":properties,"required":required}})
     }).collect()
+}
+/// Realtime speech is configured separately from text replies and the /tts endpoint.
+fn speech_directive(settings: &Value) -> &'static str {
+    match settings["realtimeLanguage"].as_str().unwrap_or("auto") {
+        "en" => "Speak aloud in American English.",
+        "en-gb" => "Speak aloud in British English.",
+        "es" => "Speak aloud in Spanish.",
+        "pt" => "Speak aloud in Portuguese.",
+        "fr" => "Speak aloud in French.",
+        "de" => "Speak aloud in German.",
+        "it" => "Speak aloud in Italian.",
+        "ja" => "Speak aloud in Japanese.",
+        "zh" => "Speak aloud in Chinese.",
+        _ => "Speak aloud in the same language as the user.",
+    }
 }
 fn instructions(app: &App, chat: &str, settings: &Value) -> String {
     // The voice model answers in the language of the chat, in the words of that language.
@@ -138,8 +153,9 @@ fn instructions(app: &App, chat: &str, settings: &Value) -> String {
         .replace("{name}", &name);
     let facts_line = strings.user_facts.replace("{facts}", &facts);
     format!(
-        "{voice} {}\n{facts_line}\n{}\n{recent}",
+        "{voice} {}\n{}\n{facts_line}\n{}\n{recent}",
         reply.directive(),
+        speech_directive(settings),
         strings.voice_earlier
     )
 }
@@ -176,6 +192,19 @@ fn finish(app: &App, chat: &str, reply: &str, status: &str, said: &str) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn realtime_speech_language_is_independent_from_reply_and_read_aloud() {
+        let settings =
+            serde_json::json!({"language":"en", "ttsLanguage":"pt", "realtimeLanguage":"es"});
+        assert_eq!(
+            super::speech_directive(&settings),
+            "Speak aloud in Spanish."
+        );
+        assert_eq!(
+            super::speech_directive(&serde_json::json!({"realtimeLanguage":"auto"})),
+            "Speak aloud in the same language as the user."
+        );
+    }
     use super::is_jpeg_base64;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
@@ -198,7 +227,6 @@ fn is_jpeg_base64(image: &str) -> bool {
 }
 #[derive(Debug)]
 enum AsyncEvent {
-    Transcription(String, String),
     Tools(String, Vec<(String, String)>),
     Camera(u64, String),
 }
@@ -245,8 +273,34 @@ async fn run(app: App, mut socket: WebSocket) {
     if start["type"] != "start" {
         return;
     }
-    if !app.backends.running("omni") {
+    if !crate::backends::demand_omni(&app).await {
         send(&mut socket,json!({"type":"error","message":"Voice chat needs Eyes and ears. Set it up in Settings → Downloads."})).await;
+        return;
+    }
+    let Some(model_use) = app.backends.begin_model_use() else {
+        send(
+            &mut socket,
+            json!({"type":"error","message":"The model is changing. Try again shortly."}),
+        )
+        .await;
+        return;
+    };
+    if !app.backends.running("omni") {
+        send(
+            &mut socket,
+            json!({"type":"error","message":"Eyes and ears is not running."}),
+        )
+        .await;
+        return;
+    }
+    if app.voice_calls.load(std::sync::atomic::Ordering::SeqCst)
+        > app.backends.running_slots("omni").unwrap_or(1)
+    {
+        send(
+            &mut socket,
+            json!({"type":"error","message":"All Omni slots are occupied by voice calls."}),
+        )
+        .await;
         return;
     }
     let settings = app.settings.lock().unwrap().clone();
@@ -306,11 +360,24 @@ async fn run(app: App, mut socket: WebSocket) {
     };
     app.emit(json!({"type":"running","running":active}));
     let instructions = instructions(&app, &chat, &settings);
+    let camera_available = !app.omni_slots_busy()
+        && app
+            .backends
+            .running_slots("omni")
+            .is_some_and(|slots| slots > 1);
+    let asr_language = settings["asrLanguage"]
+        .as_str()
+        .unwrap_or("auto")
+        .to_owned();
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut events = app.events.subscribe();
     let mut input_rate = 16000u32;
     let mut output_rate = 24000u32;
     let mut heard = Vec::new();
+    // The pinned realtime engine holds its inference slot until the session closes.
+    // Keep a bounded queue and transcribe after the call instead of competing with it.
+    let mut transcription_queue: Vec<(String, u32, Vec<u8>)> = Vec::new();
+    let mut queued_audio_bytes = 0usize;
     let mut reply: Option<String> = None;
     let mut user = String::new();
     let mut text = String::new();
@@ -343,27 +410,26 @@ async fn run(app: App, mut socket: WebSocket) {
                 Message::Text(raw)=>{let Ok(message)=serde_json::from_str::<Value>(&raw) else{continue};match message["type"].as_str().unwrap_or("") {
                     "stop"=>break,
                     "cancel"=>{heard.clear();turn_cancel.cancel();if responding && !discarding {up!(json!({"type":"response.cancel"})); discarding=true;} queued_response=false;calls.clear();if let Some(id)=reply.take(){finish(&app,&chat,&id,"stopped",&text);send(&mut socket,json!({"type":"turn.done"})).await;}send(&mut socket,json!({"type":"state","state":"listening"})).await;},
-                    "frame"=>{if let Some(image)=message["image"].as_str().filter(|s|s.len()<3_000_000){if is_jpeg_base64(image) {camera_seq+=1;let frame=(camera_seq,image.to_owned());if camera_busy{queued_frame=Some(frame);}else{camera_busy=true;let tx=tx.clone();let url=url.to_owned();tokio::spawn(async move{let _=tx.send(AsyncEvent::Camera(frame.0,describe(url,frame.1).await.unwrap_or_default()));});}}}},
+                    "frame"=>{if !camera_available || app.omni_slots_busy() {send(&mut socket,json!({"type":"error","message":"Camera requires two Omni slots; change the setting and restart Omni."})).await;continue;}if let Some(image)=message["image"].as_str().filter(|s|s.len()<3_000_000){if is_jpeg_base64(image) {camera_seq+=1;let frame=(camera_seq,image.to_owned());if camera_busy{queued_frame=Some(frame);}else{camera_busy=true;let tx=tx.clone();let url=url.to_owned();let model_use=model_use.clone();tokio::spawn(async move{let _model_use=model_use;let _=tx.send(AsyncEvent::Camera(frame.0,describe(url,frame.1).await.unwrap_or_default()));});}}}},
                     "text" | "commit"=>{let is_audio=message["type"]=="commit";let spoken=if is_audio {"…".to_owned()} else {message["text"].as_str().unwrap_or("").trim().chars().take(8000).collect()};if spoken.is_empty(){continue;}if is_audio && heard.len()<input_rate as usize*2*3/10 {heard.clear();up!(json!({"type":"input_audio_buffer.clear"}));continue;}if let Some(id)=reply.take(){turn_cancel.cancel();finish(&app,&chat,&id,"stopped",&text);}turn_cancel=session_cancel.child_token();if responding && !discarding {up!(json!({"type":"response.cancel"}));discarding=true;}calls.clear();let Ok((uid,rid))=begin(&app,&chat,&spoken) else{break};user=spoken.clone();reply=Some(rid);text.clear();audio_bytes=0;
                         let note=if seen.0>0 {format!("(On camera right now: {})",seen.1)}else{String::new()};
-                        if is_audio {let audio=std::mem::take(&mut heard);up!(json!({"type":"input_audio_buffer.commit"}));if !note.is_empty(){up!(json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":note}]}}));}let tx=tx.clone();let url=url.to_owned();let token=turn_cancel.clone();tokio::spawn(async move {let audio=media::pcm16_wav(&audio,input_rate);let result=tokio::select!{_ = token.cancelled()=>return, result=media::completion(&url,&audio)=>result.unwrap_or_default()};let _=tx.send(AsyncEvent::Transcription(uid,result));});}
+                        if is_audio {let audio=std::mem::take(&mut heard);up!(json!({"type":"input_audio_buffer.commit"}));if !note.is_empty(){up!(json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":note}]}}));}if queued_audio_bytes.saturating_add(audio.len())<=32*1024*1024 {queued_audio_bytes+=audio.len();transcription_queue.push((uid,input_rate,audio));}else{let _=edit(&app,&chat,|c|{if let Some(m)=c["messages"].as_array_mut().and_then(|v|v.iter_mut().find(|m|m["id"]==uid)){m["content"]=json!("(voice message)");}});}}
                         else {let message=if note.is_empty(){spoken}else{format!("{spoken}\n\n{note}")};up!(json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":message}]}}));}
                         up!(json!({"type":"response.create"}));responding=true;send(&mut socket,json!({"type":"state","state":"thinking"})).await;
                     },_=>{}
                 }},Message::Close(_)=>break,_=>{}
             }},
             event=upstream.next()=>{let raw=match event {Some(Ok(UpMessage::Text(raw)))=>raw,Some(Ok(UpMessage::Close(_))) | None | Some(Err(_))=>break,Some(Ok(_))=>continue};let Ok(event)=serde_json::from_str::<Value>(&raw) else{continue};match event["type"].as_str().unwrap_or(""){
-                "session.created"=>{input_rate=event.pointer("/session/audio/input/format/rate").and_then(Value::as_u64).unwrap_or(16000).clamp(8000,96000) as u32;output_rate=event.pointer("/session/audio/output/format/rate").and_then(Value::as_u64).unwrap_or(24000).clamp(8000,96000) as u32;up!(json!({"type":"session.update","session":{"instructions":instructions,"tools":schema(app.backends.running("browser")),"tool_choice":"auto","output_modalities":["text","audio"],"max_output_tokens":400}}));send(&mut socket,json!({"type":"ready","inputRate":input_rate,"outputRate":output_rate,"chatId":chat})).await;send(&mut socket,json!({"type":"state","state":"listening"})).await;},
+                "session.created"=>{input_rate=event.pointer("/session/audio/input/format/rate").and_then(Value::as_u64).unwrap_or(16000).clamp(8000,96000) as u32;output_rate=event.pointer("/session/audio/output/format/rate").and_then(Value::as_u64).unwrap_or(24000).clamp(8000,96000) as u32;up!(json!({"type":"session.update","session":{"instructions":instructions,"tools":schema(crate::backends::browser_available(&app),camera_available),"tool_choice":"auto","output_modalities":["text","audio"],"max_output_tokens":400}}));send(&mut socket,json!({"type":"ready","inputRate":input_rate,"outputRate":output_rate,"cameraAvailable":camera_available,"chatId":chat})).await;send(&mut socket,json!({"type":"state","state":"listening"})).await;},
                 "response.output_text.delta"=>{if discarding {continue;}if let Some(id)=reply.as_deref(){text.push_str(event["delta"].as_str().unwrap_or(""));stream(&app,&chat,id,&text);send(&mut socket,json!({"type":"assistant","text":text})).await;}},
                 "response.output_audio.delta"=>{if discarding {continue;}if reply.is_some(){if let Ok(bytes)=BASE64.decode(event["delta"].as_str().unwrap_or("")){audio_bytes+=bytes.len();if audio_bytes>output_rate as usize*2*45{up!(json!({"type":"response.cancel"}));}else{if audio_bytes==bytes.len(){send(&mut socket,json!({"type":"state","state":"speaking"})).await;}if socket.send(Message::Binary(bytes.into())).await.is_err(){break;}}}}},
                 "response.function_call_arguments.done"=>{if !discarding {calls.push(event);}},
-                "response.done"=>{responding=false;if discarding {discarding=false;calls.clear();if queued_response {queued_response=false;up!(json!({"type":"response.create"}));responding=true;}continue;}if event["response"]["status"]=="cancelled"{calls.clear();if let Some(id)=reply.take(){finish(&app,&chat,&id,"stopped",&text);send(&mut socket,json!({"type":"turn.done"})).await;}}else if calls.is_empty(){if let Some(id)=reply.take(){finish(&app,&chat,&id,"done",&text);send(&mut socket,json!({"type":"turn.done"})).await;}}else if let Some(id)=reply.clone(){let pending=std::mem::take(&mut calls);let tx=tx.clone();let app=app.clone();let chat=chat.clone();let request=user.clone();let token=turn_cancel.clone();let note=text.clone();send(&mut socket,json!({"type":"state","state":"working"})).await;tokio::spawn(async move{let mut output=Vec::new();for call in pending{if token.is_cancelled(){return;}let name=call["name"].as_str().unwrap_or("");let args:Value=serde_json::from_str(call["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));let result=if tools::descriptors(app.backends.running("browser"), app.backends.running("omni")).get(name).is_some(){agent_tools::run(&app,&chat,&id,&json!({"name":name,"args":args}),&note,&request,"omni",&token).await.unwrap_or_else(|e|format!("error: {e}"))}else{"Unknown tool.".into()};output.push((call["call_id"].as_str().unwrap_or("").to_owned(),result));}let _=tx.send(AsyncEvent::Tools(id,output));});}},
+                "response.done"=>{responding=false;if discarding {discarding=false;calls.clear();if queued_response {queued_response=false;up!(json!({"type":"response.create"}));responding=true;}continue;}if event["response"]["status"]=="cancelled"{calls.clear();if let Some(id)=reply.take(){finish(&app,&chat,&id,"stopped",&text);send(&mut socket,json!({"type":"turn.done"})).await;}}else if calls.is_empty(){if let Some(id)=reply.take(){finish(&app,&chat,&id,"done",&text);send(&mut socket,json!({"type":"turn.done"})).await;}}else if let Some(id)=reply.clone(){let pending=std::mem::take(&mut calls);let tx=tx.clone();let app=app.clone();let chat=chat.clone();let request=user.clone();let token=turn_cancel.clone();let note=text.clone();let model_use=model_use.clone();send(&mut socket,json!({"type":"state","state":"working"})).await;tokio::spawn(async move{let _model_use=model_use;let mut output=Vec::new();for call in pending{if token.is_cancelled(){return;}let name=call["name"].as_str().unwrap_or("");let args:Value=serde_json::from_str(call["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));let result=if tools::descriptors(crate::backends::browser_available(&app), camera_available && !app.omni_slots_busy()).get(name).is_some(){agent_tools::run(&app,&chat,&id,&json!({"name":name,"args":args}),&note,&request,"omni",None,&token).await.unwrap_or_else(|e|format!("error: {e}"))}else{"Unknown tool.".into()};output.push((call["call_id"].as_str().unwrap_or("").to_owned(),result));}let _=tx.send(AsyncEvent::Tools(id,output));});}},
                 "error"=>{send(&mut socket,json!({"type":"error","message":event["error"]["message"].as_str().unwrap_or("Voice error.")})).await;},_=>{}
             }},
             event=rx.recv()=>{match event {
-                Some(AsyncEvent::Transcription(uid,result))=>{let result=if result.is_empty(){"(voice message)".to_owned()}else{result};let _=edit(&app,&chat,|c|{if let Some(m)=c["messages"].as_array_mut().and_then(|v|v.iter_mut().find(|m|m["id"]==uid)){m["content"]=json!(result);}});send(&mut socket,json!({"type":"user","text":result})).await;},
                 Some(AsyncEvent::Tools(id,outputs))=>{if reply.as_ref()!=Some(&id) || turn_cancel.is_cancelled(){continue;}for (call_id,output) in outputs {up!(json!({"type":"conversation.item.create","item":{"type":"function_call_output","call_id":call_id,"output":output}}));}up!(json!({"type":"response.create"}));responding=true;send(&mut socket,json!({"type":"state","state":"thinking"})).await;},
-                Some(AsyncEvent::Camera(seq,description))=>{if !description.is_empty(){seen=(seq,description);}camera_busy=false;if let Some(frame)=queued_frame.take(){camera_busy=true;let tx=tx.clone();let url=url.to_owned();tokio::spawn(async move{let _=tx.send(AsyncEvent::Camera(frame.0,describe(url,frame.1).await.unwrap_or_default()));});}},None=>break
+                Some(AsyncEvent::Camera(seq,description))=>{if !description.is_empty(){seen=(seq,description);}camera_busy=false;if let Some(frame)=queued_frame.take(){camera_busy=true;let tx=tx.clone();let url=url.to_owned();let model_use=model_use.clone();tokio::spawn(async move{let _model_use=model_use;let _=tx.send(AsyncEvent::Camera(frame.0,describe(url,frame.1).await.unwrap_or_default()));});}},None=>break
             }},
             event=events.recv()=>{if let Ok(event)=event{if let Some(value)=Some(&event).filter(|e|e.contains(r#""type":"chat""#)).and_then(|e|serde_json::from_str::<Value>(e).ok()){if value["type"]=="chat" && value["chat"]["id"]==chat {if let Some(id)=reply.as_deref(){if let Some(step)=value["chat"]["messages"].as_array().and_then(|v|v.iter().find(|m|m["id"]==id)).and_then(|m|m["steps"].as_array()).and_then(|v|v.last()){send(&mut socket,json!({"type":"tool","label":step["label"],"status":step["status"]})).await;}}}}}}
         }
@@ -374,6 +440,39 @@ async fn run(app: App, mut socket: WebSocket) {
         finish(&app, &chat, &id, "stopped", &text);
     }
     let _ = upstream.close(None).await;
+    drop(upstream);
+    if !transcription_queue.is_empty() {
+        let app = app.clone();
+        let chat = chat.clone();
+        let url = url.to_owned();
+        let model_use = model_use.clone();
+        tokio::spawn(async move {
+            let _model_use = model_use;
+            for (uid, rate, pcm) in transcription_queue {
+                if !app.chats.lock().unwrap().iter().any(|c| c["id"] == chat) {
+                    break;
+                }
+                let audio = media::pcm16_wav(&pcm, rate);
+                let text = tokio::time::timeout(
+                    Duration::from_secs(120),
+                    media::completion(&url, &audio, &asr_language),
+                )
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "(voice message)".to_owned());
+                let _ = edit(&app, &chat, |c| {
+                    if let Some(m) = c["messages"]
+                        .as_array_mut()
+                        .and_then(|v| v.iter_mut().find(|m| m["id"] == uid))
+                    {
+                        m["content"] = json!(text);
+                    }
+                });
+            }
+        });
+    }
     let active = {
         let mut running = app.running.lock().unwrap();
         running.remove(&chat);

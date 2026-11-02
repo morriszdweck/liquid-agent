@@ -77,6 +77,7 @@ pub async fn run(
     note: &str,
     request: &str,
     model: &str,
+    mut model_use: Option<&mut Option<std::sync::Arc<crate::backends::ModelUseLease>>>,
     cancel: &CancellationToken,
 ) -> Result<String> {
     let name = call["name"].as_str().context("Invalid tool name")?;
@@ -265,7 +266,31 @@ pub async fn run(
         json!({"status":"running","decision":decision,"decisionBy":decided_by}),
         false,
     )?;
-    let result = tools::execute(app, name, args, settings, cancel).await;
+    // Only after authorization, release this chat's shared lease so hybrid mode can
+    // replace the text model. Other model operations keep their own leases.
+    let needs_warmup = matches!(
+        name,
+        "look_at_image" | "look_at_screen" | "transcribe_audio"
+    ) && !app.backends.running("omni");
+    let ready = if needs_warmup {
+        if let Some(slot) = model_use.as_deref_mut() {
+            drop(slot.take());
+            let ready = crate::backends::demand_omni_cancellable(app, cancel).await;
+            *slot = app.backends.begin_model_use();
+            ready && slot.is_some()
+        } else {
+            false
+        }
+    } else {
+        true
+    };
+    let result = if cancel.is_cancelled() {
+        Err(anyhow::anyhow!("Stopped."))
+    } else if !ready {
+        Err(anyhow::anyhow!("Eyes and ears could not be started."))
+    } else {
+        tools::execute(app, name, args, settings, cancel).await
+    };
     if cancel.is_cancelled() {
         edit_step(
             app,

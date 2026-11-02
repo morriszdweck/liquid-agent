@@ -15,9 +15,9 @@ describe("Rust native downloads against a fixture service", () => {
   it("Rust native downloads against a fixture service", async () => {
     const repo=fileURLToPath(new URL("../..", import.meta.url)); const dir=fs.mkdtempSync(path.join(os.tmpdir(),"liquid-installer-"));
     const data=path.join(dir,"data"),dist=path.join(dir,"dist"); fs.mkdirSync(data); fs.mkdirSync(dist); fs.writeFileSync(path.join(dist,"index.html"),"<head></head>");
-    const ports=[]; const sockets=[]; for (let i=0;i<4;i++) { const socket=net.createServer(); await new Promise((resolve)=>socket.listen(0,"127.0.0.1",resolve)); sockets.push(socket); ports.push(socket.address().port); } for (const socket of sockets) await new Promise((resolve)=>socket.close(resolve));
-    const [appPort,modelPort,guardianPort,browserPort]=ports;
-    const binary=`#!${process.execPath}\nconst http=require('http'),fs=require('fs');const i=process.argv.indexOf('--port');if(i>=0){fs.writeFileSync(${JSON.stringify(path.join(dir,'model-pid'))},String(process.pid));fs.writeFileSync(${JSON.stringify(path.join(dir,'model-args'))},JSON.stringify(process.argv.slice(2)));}const port=Number(i>=0?process.argv[i+1]:process.argv[3]);http.createServer((q,s)=>s.end('{"ok":true}')).listen(port,'127.0.0.1');\n`;
+    const ports=[]; const sockets=[]; for (let i=0;i<5;i++) { const socket=net.createServer(); await new Promise((resolve)=>socket.listen(0,"127.0.0.1",resolve)); sockets.push(socket); ports.push(socket.address().port); } for (const socket of sockets) await new Promise((resolve)=>socket.close(resolve));
+    const [appPort,modelPort,guardianPort,browserPort,omniPort]=ports;
+    const binary=`#!${process.execPath}\nconst http=require('http'),fs=require('fs');const i=process.argv.indexOf('--port');if(i>=0){fs.writeFileSync(${JSON.stringify(path.join(dir,'model-pid'))},String(process.pid));fs.writeFileSync(${JSON.stringify(path.join(dir,'model-args'))},JSON.stringify(process.argv.slice(2)));}const port=Number(i>=0?process.argv[i+1]:process.argv[3]);http.createServer((q,s)=>{if(q.method==='POST' && q.url==='/v1/chat/completions'){q.resume();q.on('end',()=>{s.writeHead(200,{'content-type':'text/event-stream'});s.write('data: '+JSON.stringify({choices:[{delta:{content:'Hello '}}]})+'\\n\\n');const timer=setTimeout(()=>s.end('data: '+JSON.stringify({choices:[{delta:{content:'world'}}]})+'\\n\\ndata: [DONE]\\n\\n'),4000);s.on('close',()=>clearTimeout(timer));});return;}s.end('{"ok":true}');}).listen(port,'127.0.0.1');\n`;
     function tarFile(name,data) {
       const header=Buffer.alloc(512), write=(value,offset,size)=>header.write(value,offset,size,"ascii");
       const octal=(value,size)=>value.toString(8).padStart(size-1,"0")+"\0";
@@ -36,14 +36,14 @@ describe("Rust native downloads against a fixture service", () => {
     const browserBinary=Buffer.from("#!/bin/sh\nexit 0\n");
     const browserPlatform=process.platform==="darwin"?(process.arch==="arm64"?"mac-arm64":"mac-x64"):(process.arch==="arm64"?"linux-arm64":"linux64");
     const gguf=Buffer.alloc(24); gguf.write("GGUF",0); gguf.writeUInt32LE(3,4);
-    const archive=zlib.gzipSync(tarFile("bin/llama-server",Buffer.from(binary))); const model=Buffer.from("ABCDEFGHIJKLMNO"); const guardianData=Buffer.alloc(128*1024,7); let slow=true, slowQuant=false; const ranges=[];
+    const archive=zlib.gzipSync(tarFile("bin/llama-server",Buffer.from(binary))); const model=Buffer.from("ABCDEFGHIJKLMNO"); const guardianData=Buffer.alloc(128*1024,7); let slow=true, slowQuant=false, wrongRelease=true; const ranges=[];
     const mock=http.createServer((req,res)=>{
       if (req.url === "/api/models/org/test") {res.setHeader("content-type","application/json");return res.end(JSON.stringify({modelId:"org/test",cardData:{model_name:"Fixture",license:"mit"}}));}
       if (req.url === "/api/models/org/test/tree/main?recursive=true&expand=true") {res.setHeader("content-type","application/json");return res.end(JSON.stringify([{type:"file",path:"nested/Test-Q4_0.gguf",size:gguf.length},{type:"file",path:"nested/Test-Q8_0.gguf",size:gguf.length},{type:"file",path:"nested/Bad-Q2_K.gguf",size:12}]));}
       if (req.url.includes("Q6_K.gguf")) {res.statusCode=503;return res.end("fixture failure");}
       if (req.url === "/browser-index.json") {res.setHeader("content-type","application/json");return res.end(JSON.stringify({channels:{Stable:{downloads:{"chrome-headless-shell":[{platform:browserPlatform,url:`http://127.0.0.1:${mock.address().port}/browser.zip`}]}}}}));}
       if (req.url === "/browser.zip") {res.setHeader("content-type","application/zip");return res.end(zipFile(`chrome-headless-shell-${browserPlatform}/chrome-headless-shell`,browserBinary));}
-      if (req.url === "/releases") { res.setHeader("content-type","application/json"); return res.end(JSON.stringify([{assets:[{name:`llama-test-bin-${process.platform === "darwin" ? "macos" : "ubuntu"}-${process.arch}.tar.gz`,browser_download_url:`http://127.0.0.1:${mock.address().port}/engine.tar.gz`}]}])); }
+      if (req.url === "/releases") { res.setHeader("content-type","application/json"); return res.end(JSON.stringify({tag_name:wrongRelease?"b99999":"b12017",assets:[{name:`llama-b12017-bin-${process.platform === "darwin" ? "macos" : "ubuntu"}-${process.arch}.tar.gz`,browser_download_url:`http://127.0.0.1:${mock.address().port}/engine.tar.gz`}]})); }
       const data=req.url === "/engine.tar.gz" ? archive : req.url.includes("/Bad-Q2_K.gguf") ? Buffer.from("bad weights!") : req.url.includes("/org/test/resolve/") ? gguf : req.url.includes("/LiquidAI/") ? model : guardianData;
       let start=0;
       if (req.headers.range) { start=Number(req.headers.range.match(/^bytes=(\d+)-$/)?.[1] ?? 0); ranges.push({path:req.url,start}); res.statusCode=206; res.setHeader("Content-Range",`bytes ${start}-${data.length-1}/${data.length}`); }
@@ -56,7 +56,7 @@ describe("Rust native downloads against a fixture service", () => {
     const fakeGuardian=path.join(dir,"guardian"); fs.writeFileSync(fakeGuardian,binary,{mode:0o755});
     fs.mkdirSync(path.join(data,"models")); fs.writeFileSync(path.join(data,"models","LFM3-1.7B-Q4_K_M.gguf.part"),model.subarray(0,3));
     const binDir=path.join(dir,"bin"); fs.mkdirSync(binDir);
-    const env={...process.env,LIQUID_AGENT_NO_AUTOSTART:"1",PATH:`${binDir}:${process.env.PATH}`,LIQUID_AGENT_BROWSER_INDEX:`${mockBase}/browser-index.json`,LIQUID_AGENT_BROWSER_PORT:String(browserPort),LIQUID_AGENT_RUST_PORT:String(appPort),LIQUID_AGENT_RUST_HOME:data,LIQUID_AGENT_WEB_DIST:dist,LIQUID_AGENT_SMALL_PORT:String(modelPort),LIQUID_GUARDIAN_PORT:String(guardianPort),LIQUID_AGENT_HF_BASE:mockBase,LIQUID_AGENT_RELEASES_URL:`${mockBase}/releases`,LIQUID_AGENT_GUARDIAN_BINARY:fakeGuardian,LIQUID_AGENT_GPU:"cpu",NO_PROXY:"127.0.0.1,localhost",no_proxy:"127.0.0.1,localhost"};
+    const env={...process.env,LIQUID_AGENT_NO_AUTOSTART:"1",PATH:`${binDir}:${process.env.PATH}`,LIQUID_AGENT_BROWSER_INDEX:`${mockBase}/browser-index.json`,LIQUID_AGENT_BROWSER_PORT:String(browserPort),LIQUID_AGENT_RUST_PORT:String(appPort),LIQUID_AGENT_RUST_HOME:data,LIQUID_AGENT_WEB_DIST:dist,LIQUID_AGENT_SMALL_PORT:String(modelPort),LIQUID_AGENT_OMNI_PORT:String(omniPort),LIQUID_GUARDIAN_PORT:String(guardianPort),LIQUID_AGENT_HF_BASE:mockBase,LIQUID_AGENT_RELEASES_URL:`${mockBase}/releases`,LIQUID_AGENT_GUARDIAN_BINARY:fakeGuardian,LIQUID_AGENT_GPU:"cpu",NO_PROXY:"127.0.0.1,localhost",no_proxy:"127.0.0.1,localhost"};
     let app; let log="";
     const base=`http://127.0.0.1:${appPort}`; const sleep=(ms)=>new Promise(r=>setTimeout(r,ms)); let token="";
     const call=async (method,url,body)=>{ const res=await fetch(base+url,{method,headers:{"x-liquid-token":token,"content-type":"application/json"},...(body?{body:JSON.stringify(body)}:{})}); if(!res.ok) throw new Error(`${url}: ${res.status} ${await res.text()}`); return res.json(); };
@@ -70,16 +70,35 @@ describe("Rust native downloads against a fixture service", () => {
     async function stop() { const exited=once(app,"exit"); app.kill("SIGINT"); await exited; app=null; }
     try {
       await start();
+      await call("POST","/api/parts/install",{ids:["engine"]});
+      const rejectedRelease=await waitFor("unexpected engine release",s=>!s.busy && s.parts.find(p=>p.id==="engine")?.status==="failed");
+      check(rejectedRelease.parts.find(p=>p.id==="engine").error.includes("Unexpected llama.cpp release") && !fs.existsSync(path.join(data,"engine")), "Installer rejects a mismatched engine release");
+      wrongRelease=false;
       await call("POST","/api/parts/install",{ids:["small"]});
       await waitFor("model installation",s=>!s.busy && s.parts.find(p=>p.id==="small")?.status==="running");
       check(fs.readFileSync(path.join(data,"models","LFM3-1.7B-Q4_K_M.gguf")).equals(model) && ranges.some(r=>r.path.includes("LFM3-1.7B") && r.start===3),"Rust installer resumes and starts a model after installing its engine");
+      check(fs.readFileSync(path.join(data,"engine",".version"),"utf8") === "b12017" && (await call("GET","/api/state")).parts.find(p=>p.id==="engine").version === "b12017", "Installer records the pinned engine release");
+      await call("PATCH","/api/settings",{smallURL:`http://127.0.0.1:${modelPort}/v1`});
+      const activeChat=await call("POST","/api/chats",{text:"Describe a peaceful morning."});
       const firstPid=fs.readFileSync(path.join(dir,"model-pid"),"utf8");slowQuant=true;
       await call("PATCH","/api/settings",{smallQuant:"Q8_0"});
       const switching=await waitFor("live model size download",s=>s.busy && s.parts.find(p=>p.id==="small")?.status==="installing");
       check(switching.parts.find(p=>p.id==="small").live===true && fs.readFileSync(path.join(dir,"model-pid"),"utf8")===firstPid,"Model remains live while its new size downloads");
+      const waiting=await waitFor("model replacement waiting for chat",s=>s.busy && s.parts.find(p=>p.id==="small")?.text?.includes("Waiting for active work"));
+      check(waiting.chats.find(c=>c.id===activeChat.id)?.messages.at(-1)?.status==="streaming" && fs.readFileSync(path.join(dir,"model-pid"),"utf8")===firstPid,"Model replacement waits for the active chat");
       await waitFor("new model size",s=>!s.busy && s.parts.find(p=>p.id==="small")?.status==="running");
+      check((await call("GET","/api/chats")).find(c=>c.id===activeChat.id)?.messages.at(-1)?.status==="done","The active chat completes before model replacement");
+      await call("DELETE",`/api/chats/${activeChat.id}`);
       check(fs.readFileSync(path.join(dir,"model-pid"),"utf8")!==firstPid && JSON.parse(fs.readFileSync(path.join(dir,"model-args"),"utf8")).some(a=>a.endsWith("LFM3-1.7B-Q8_0.gguf")),"Rust server starts the newly downloaded model size");
-      slowQuant=false;await call("PATCH","/api/settings",{smallQuant:"Q4_K_M"});
+      slowQuant=false;
+      const interruptedChat=await call("POST","/api/chats",{text:"Describe a quiet afternoon."});
+      await call("PATCH","/api/settings",{smallQuant:"Q4_K_M"});
+      await waitFor("installed model replacement waiting for chat",s=>s.busy && s.parts.find(p=>p.id==="small")?.text?.includes("Waiting for active work"));
+      await call("POST","/api/parts/small/stop");
+      await waitFor("explicit stop while replacement waits",s=>!s.busy && s.parts.find(p=>p.id==="small")?.status==="installed");
+      check((await call("GET","/api/state")).parts.find(p=>p.id==="small").status==="installed","A manual stop while replacement waits suppresses restart");
+      await call("DELETE",`/api/chats/${interruptedChat.id}`);
+      await call("POST","/api/parts/small/start");
       await waitFor("previous model size",s=>!s.busy && s.parts.find(p=>p.id==="small")?.status==="running");
       check(JSON.parse(fs.readFileSync(path.join(dir,"model-args"),"utf8")).some(a=>a.endsWith("LFM3-1.7B-Q4_K_M.gguf")),"Rust server switches back to an installed size");
       const pidBeforeFailure=fs.readFileSync(path.join(dir,"model-pid"),"utf8");
@@ -96,12 +115,28 @@ describe("Rust native downloads against a fixture service", () => {
       slowQuant=false;await call("PATCH","/api/settings",{smallQuant:"Q4_K_M"});
       await waitFor("default model after stop",s=>!s.busy && s.parts.find(p=>p.id==="small")?.status==="running");
       await call("POST","/api/parts/small/stop");
+      await call("PATCH","/api/settings",{startupMode:"hybrid",omniURL:`http://127.0.0.1:${omniPort}/v1`});
+      await call("POST","/api/parts/install",{ids:["omni"]});
+      const installedOmni=await waitFor("Omni installation",s=>!s.busy && s.parts.find(p=>p.id==="omni")?.status==="installed");
+      check(installedOmni.parts.find(p=>p.id==="omni").onDemand === true,"Hybrid installation leaves Omni unloaded until needed");
+      const warmed=await fetch(`${base}/api/speak`,{method:"POST",headers:{"x-liquid-token":token,"content-type":"application/json"},body:JSON.stringify({text:"Hola",lang:"es"})});
+      check(warmed.ok,"Hybrid starts newly installed Omni on demand");
+      await waitFor("Omni warmup",s=>s.parts.find(p=>p.id==="omni")?.status==="running");
+      await call("POST","/api/parts/install",{ids:["small"]});
+      const deferredSmall=await waitFor("deferred text model",s=>!s.busy && s.parts.find(p=>p.id==="small")?.status==="installed");
+      check(deferredSmall.parts.find(p=>p.id==="omni")?.status==="running","Hybrid installation does not add text while Omni is active");
+      check(JSON.parse(fs.readFileSync(path.join(dir,"model-args"),"utf8")).some(a=>a.endsWith("mmproj-LFM3-Omni-2B-Q8_0.gguf")),"Omni starts with the default Q8 projector");
+      await call("PATCH","/api/settings",{omniProjector:"Q4_K_M"});
+      await waitFor("Omni projector switch",s=>!s.busy && s.parts.find(p=>p.id==="omni")?.status==="running");
+      check(fs.existsSync(path.join(data,"models","mmproj-LFM3-Omni-2B-Q4_K_M.gguf")) && JSON.parse(fs.readFileSync(path.join(dir,"model-args"),"utf8")).some(a=>a.endsWith("mmproj-LFM3-Omni-2B-Q4_K_M.gguf")),"Changing projector downloads and starts the selected quantization");
+      await call("POST","/api/parts/omni/stop");
+      await call("PATCH","/api/settings",{startupMode:"auto"});
       await call("PATCH","/api/settings",{guardianURL:`http://127.0.0.1:${guardianPort}`,approvalMode:"approveForMe"});
       await waitFor("guardian download",s=>s.busy && s.parts.find(p=>p.id==="guardian")?.status==="installing");
       await call("PATCH","/api/settings",{approvalMode:"askAlways"});
       slow=false;
-      await waitFor("guardian after preference change",s=>!s.busy && s.parts.find(p=>p.id==="guardian")?.status==="running");
-      check((await call("GET","/api/settings")).approvalMode === "askAlways" && !(await call("GET","/api/state")).guardianWanted,"Changing the approval preference cancels deferred activation");
+      await waitFor("guardian after preference change",s=>!s.busy && s.parts.find(p=>p.id==="guardian")?.status==="installed");
+      check((await call("GET","/api/settings")).approvalMode === "askAlways" && !(await call("GET","/api/state")).guardianWanted,"Changing the approval preference leaves the installed safety helper stopped");
       await call("POST","/api/parts/guardian/stop"); fs.rmSync(path.join(data,"guardian"),{recursive:true,force:true}); slow=true;
       await call("PATCH","/api/settings",{approvalMode:"approveForMe"});
       await waitFor("guardian redownload",s=>s.busy && s.parts.find(p=>p.id==="guardian")?.status==="installing");
@@ -116,8 +151,10 @@ describe("Rust native downloads against a fixture service", () => {
       check(fs.readFileSync(path.join(data,"guardian",".ready"),"utf8")==="ProCreations/auto-150m-3" && ranges.some(r=>r.path.includes("ProCreations") && r.start>0) && (await call("GET","/api/settings")).approvalMode === "approveForMe","Rust installer restores the safety-helper request and resumes it after restart");
       await call("POST","/api/parts/guardian/stop");
       await call("POST","/api/parts/install",{ids:["browser"]});
-      await waitFor("browser installation",s=>!s.busy && s.parts.find(p=>p.id==="browser")?.status==="running");
-      check(fs.existsSync(path.join(data,"bridge",".ready")) && fs.readFileSync(path.join(data,"bridge","browser",`chrome-headless-shell-${browserPlatform}`,"chrome-headless-shell"),"utf8")===browserBinary.toString() && (fs.statSync(path.join(data,"bridge","browser",`chrome-headless-shell-${browserPlatform}`,"chrome-headless-shell")).mode & 0o100)!==0,"Rust installer downloads the browser and starts the Web helper");
+      await waitFor("browser installation",s=>!s.busy && s.parts.find(p=>p.id==="browser")?.status==="installed");
+      check(fs.existsSync(path.join(data,"bridge",".ready")) && fs.readFileSync(path.join(data,"bridge","browser",`chrome-headless-shell-${browserPlatform}`,"chrome-headless-shell"),"utf8")===browserBinary.toString() && (fs.statSync(path.join(data,"bridge","browser",`chrome-headless-shell-${browserPlatform}`,"chrome-headless-shell")).mode & 0o100)!==0,"Rust installer downloads the browser without starting the Web helper");
+      await call("POST","/api/parts/browser/start");
+      await waitFor("manual browser start",s=>s.parts.find(p=>p.id==="browser")?.status==="running");
       await call("POST","/api/parts/browser/stop");
       const resolved=await call("POST","/api/models/resolve",{link:"org/test"});
       check(resolved.repo==="org/test" && resolved.variants.length===3 && resolved.license==="mit","Rust server resolves Hugging Face model variants");

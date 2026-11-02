@@ -66,6 +66,8 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
     }
   });
   const [files, setFiles] = useState<Pending[]>([]);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [dragging, setDragging] = useState(false);
   const [recording, setRecording] = useState<null | "on" | "busy">(null);
   const [elapsed, setElapsed] = useState(0);
@@ -74,7 +76,8 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   const picker = useRef<HTMLInputElement>(null);
   const mic = useRef<{ mic: Microphone; chunks: Int16Array[]; started: number } | null>(null);
   const busy = chat ? running.includes(chat.id) : false;
-  const omniUp = part(parts, "omni")?.status === "running";
+  const omni = part(parts, "omni");
+  const omniUp = omni?.status === "running" || omni?.onDemand;
 
   const keepDraft = useCallback(
     (value: string) => {
@@ -127,6 +130,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }, [autoFocus, chat?.id]);
 
   const addFiles = useCallback(async (list: File[] | Blob[], names?: string[]) => {
+    if (sendingRef.current) return;
     for (let i = 0; i < list.length; i++) {
       const raw = list[i];
       const file = raw instanceof File ? raw : new File([raw], names?.[i] ?? "file", { type: raw.type });
@@ -183,27 +187,32 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }, [addFiles]);
 
   const uploading = files.some((f) => !f.uploaded);
-  const canSend = !busy && !uploading && (text.trim().length > 0 || files.length > 0) && recording === null;
+  const canSend = !busy && !sending && !uploading && (text.trim().length > 0 || files.length > 0) && recording === null;
 
   async function send() {
-    if (!canSend) return;
+    if (!canSend || sendingRef.current) return;
     const body = { text: text.trim(), attachments: files.map((f) => f.uploaded!.id) };
-    setText("");
-    setFiles([]);
+    sendingRef.current = true;
+    setSending(true);
     try {
       if (chat) await api("POST", `/api/chats/${chat.id}/send`, body);
       else {
         const created = await api<Chat>("POST", "/api/chats", body);
         go(`#/chat/${created.id}`);
       }
+      setText("");
+      setFiles([]);
       keepDraft("");
     } catch (e) {
-      setText(body.text);
       errorToast(e);
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   }
 
   async function lookAtScreen() {
+    if (sendingRef.current) return;
     if (!omniUp) return toast(t("composer.needsEyes"), "error");
     try {
       const shot = await captureScreen();
@@ -216,6 +225,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }
 
   async function startDictation() {
+    if (sendingRef.current) return;
     if (!omniUp) return toast(t("composer.dictationNeedsEyes"), "error");
     const chunks: Int16Array[] = [];
     let heard = 0;
@@ -292,7 +302,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
                     <Spinner size={14} />
                   </span>
                 )}
-                <button className="attachment-remove" onClick={() => setFiles((all) => all.filter((x) => x.key !== f.key))} aria-label={t("composer.remove", { name: f.name })}>
+                <button className="attachment-remove" disabled={sending} onClick={() => setFiles((all) => all.filter((x) => x.key !== f.key))} aria-label={t("composer.remove", { name: f.name })}>
                   <X size={12} />
                 </button>
               </div>
@@ -300,6 +310,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
           </div>
         )}
 
+        {sending && <div className="muted small" role="status"><Spinner size={12} /> {t("composer.preparing")}</div>}
         {recording ? (
           <div className="dictation">
             <span className="rec-dot" />
@@ -325,6 +336,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
         ) : (
           <textarea
             ref={area}
+            disabled={sending}
             value={text}
             rows={1}
             placeholder={chat?.messages.length ? t("composer.reply") : t("composer.ask", { device })}
@@ -407,7 +419,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
               </button>
             ) : text.trim() || files.length ? (
               <button className="round-btn primary" onClick={send} disabled={!canSend} aria-label={t("common.send")} title={t("common.send")}>
-                {uploading ? <Spinner size={14} /> : <ArrowUp size={18} />}
+                {uploading || sending ? <Spinner size={14} /> : <ArrowUp size={18} />}
               </button>
             ) : (
               <button className="round-btn primary voice" onClick={() => go(chat ? `#/voice/${chat.id}` : "#/voice")} aria-label={t("sidebar.voiceChat")} title={t("sidebar.voiceChat")}>

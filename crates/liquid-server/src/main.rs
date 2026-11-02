@@ -3,6 +3,7 @@
 mod agent_tools;
 mod backends;
 mod browser_bridge;
+mod capabilities;
 mod chat;
 #[cfg(test)]
 mod desktop_check;
@@ -66,6 +67,10 @@ struct App {
 }
 
 impl App {
+    fn omni_slots_busy(&self) -> bool {
+        let slots = self.backends.running_slots("omni").unwrap_or(1);
+        self.voice_calls.load(std::sync::atomic::Ordering::SeqCst) >= slots
+    }
     fn guardian_wanted(&self) -> bool {
         self.guardian_wanted
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -94,7 +99,7 @@ impl App {
         let running: Vec<String> = self.running.lock().unwrap().keys().cloned().collect();
         json!({"chats":self.chats.lock().unwrap().clone(), "running":running,
             "settings":settings, "parts":self.backends.parts(&self.data, &settings), "busy":self.backends.busy(), "guardianWanted":self.guardian_wanted(),
-            "machine":{"memoryGB":backends::memory_gb(),"os":os,"gpu":backends::gpu_flavor()}, "memory":self.memory.lock().unwrap().clone(),
+            "machine":{"memoryGB":backends::memory_gb(),"availableMemoryBytes":backends::system_memory()["availableBytes"],"os":os,"gpu":backends::gpu_flavor()}, "memory":self.memory.lock().unwrap().clone(),
             "ideas":store::load_or(&self.data,"ideas.json",json!({"at":0,"items":[]})),
             "routines":self.routines.lock().unwrap().clone(), "activity":self.activity.lock().unwrap().iter().take(200).cloned().collect::<Vec<_>>(),
             "reminders":self.reminders.lock().unwrap().clone(), "dataDir":self.data.to_string_lossy(),
@@ -103,13 +108,13 @@ impl App {
 }
 
 fn defaults(home: &str) -> Value {
-    json!({"userName":"", "language":"auto", "uiLanguage":"en", "personality":"friendly", "approvalMode":"askAlways", "theme":"system", "voice":"female", "speakReplies":false, "autoUpdate":true, "workspace":home, "guardianThreshold":0.5, "contextBudget":6000, "toolOutputLimit":1200, "maxSteps":8, "temperature":0.3, "smallQuant":"Q4_K_M", "omniQuant":"Q4_K_M", "smallURL":"http://127.0.0.1:8180/v1", "omniURL":"http://127.0.0.1:8181/v1", "guardianURL":"http://127.0.0.1:8766", "browserURL":"http://127.0.0.1:8767"})
+    json!({"userName":"", "language":"auto", "uiLanguage":"en", "personality":"friendly", "approvalMode":"askAlways", "theme":"system", "voice":"female", "ttsLanguage":"auto", "realtimeLanguage":"auto", "asrLanguage":"auto", "verifySpeech":false, "speakReplies":false, "autoUpdate":true, "workspace":home, "guardianThreshold":0.5, "contextBudget":6000, "modelContext":16384, "omniSlots":1, "promptCacheMiB":256, "idleSleepMinutes":0, "gpuLayers":99, "startupMode":"auto", "toolOutputLimit":1200, "maxSteps":8, "temperature":0.3, "smallQuant":"Q4_K_M", "omniQuant":"Q4_K_M", "omniProjector":"Q8_0", "smallURL":"http://127.0.0.1:8180/v1", "omniURL":"http://127.0.0.1:8181/v1", "guardianURL":"http://127.0.0.1:8766", "browserURL":"http://127.0.0.1:8767"})
 }
 fn choices() -> Value {
     let codes: Vec<&str> = liquid_core::i18n::CODES.to_vec();
     let mut languages = vec!["auto"];
     languages.extend(codes.iter().copied());
-    json!({"language":languages, "uiLanguage":codes, "personality":["friendly","concise","playful","professional"], "approvalMode":["askAlways","approveForMe","fullAuto"], "theme":["system","light","dark"], "voice":["female","male"], "smallQuant":["QAD-Q4_0","Q4_K_M","Q5_K_M","Q6_K","Q8_0","F16"], "omniQuant":["Q4_0","Q4_K_M","Q8_0","F16"]})
+    json!({"language":languages, "uiLanguage":codes, "personality":["friendly","concise","playful","professional"], "approvalMode":["askAlways","approveForMe","fullAuto"], "theme":["system","light","dark"], "voice":["female","male"], "ttsLanguage":media::SPEECH_LANGUAGES, "realtimeLanguage":["auto","en","en-gb","es","pt","fr","de","it","ja","zh"], "asrLanguage":["auto","en","es","pt","fr","de","it","ja","zh"], "modelContext":[8192,16384,32768], "omniSlots":[1,2], "promptCacheMiB":[0,256,1024,8192], "idleSleepMinutes":[0,5,15,30], "gpuLayers":[0,16,99], "startupMode":["auto","hybrid","dual","single-omni"], "smallQuant":["QAD-Q4_0","Q4_K_M","Q5_K_M","Q6_K","Q8_0","F16"], "omniQuant":["Q4_0","Q4_K_M","Q8_0","F16"], "omniProjector":["Q4_K_M","Q8_0"]})
 }
 fn response(status: StatusCode, content_type: &'static str, data: impl Into<Body>) -> Response {
     Response::builder()
@@ -169,7 +174,7 @@ async fn route(State(app): State<App>, request: Request) -> Response {
     if path == "/healthz" {
         return json_response(
             StatusCode::OK,
-            json!({"app":"liquid-agent","build":app.update.build}),
+            json!({"app":"liquid-agent","build":app.update.build,"pid":std::process::id()}),
         );
     }
     let api = path.starts_with("/api/");
@@ -242,6 +247,9 @@ async fn route(State(app): State<App>, request: Request) -> Response {
                 ),
             };
         }
+        if request.method() == Method::POST && path == "/api/capabilities/omni" {
+            return capabilities::probe(&app).await;
+        }
         if request.method() == Method::POST && path == "/api/parts/install" {
             return installer::install(&app, request).await;
         }
@@ -285,6 +293,9 @@ async fn route(State(app): State<App>, request: Request) -> Response {
         return match (request.method(), path.as_str()) {
             (&Method::GET, "/api/ping") => json_response(StatusCode::OK, json!({"ok":true})),
             (&Method::GET, "/api/state") => json_response(StatusCode::OK, app.snapshot()),
+            (&Method::GET, "/api/diagnostics") => {
+                json_response(StatusCode::OK, backends::diagnostic_snapshot(&app).await)
+            }
             (&Method::GET, "/api/settings") => {
                 json_response(StatusCode::OK, app.settings.lock().unwrap().clone())
             }
@@ -312,12 +323,14 @@ async fn route(State(app): State<App>, request: Request) -> Response {
                     }
                 };
                 let mut settings = app.settings.lock().unwrap();
-                if ["small", "omni"].iter().any(|id| {
+                let changing_model = ["small", "omni"].iter().any(|id| {
                     patch
                         .get(format!("{id}Quant"))
                         .is_some_and(|value| settings.get(format!("{id}Quant")) != Some(value))
-                }) && app.backends.busy()
-                {
+                }) || patch
+                    .get("omniProjector")
+                    .is_some_and(|value| settings.get("omniProjector") != Some(value));
+                if changing_model && app.backends.busy() {
                     return json_response(
                         StatusCode::CONFLICT,
                         json!({"error":"Wait for the current download to finish, then pick a size."}),
@@ -351,6 +364,7 @@ async fn route(State(app): State<App>, request: Request) -> Response {
                     .into_iter()
                     .filter(|id| {
                         settings.get(format!("{id}Quant")) != next.get(format!("{id}Quant"))
+                            || (*id == "omni" && settings["omniProjector"] != next["omniProjector"])
                     })
                     .collect();
                 *settings = next.clone();
@@ -744,10 +758,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("LIQUID_AGENT_NO_AUTOSTART").as_deref() != Ok("1") {
         let started = app.clone();
         tokio::spawn(async move {
-            for id in ["small", "omni", "guardian", "browser"] {
+            // In automatic mode the second start may be refused as memory changes.
+            // Prefer the multimodal model, which can also handle text, in that case.
+            let mut omni_failed = false;
+            for id in ["guardian", "omni", "small"] {
                 let settings = started.settings.lock().unwrap().clone();
+                if settings["startupMode"] == "single-omni" && ["small", "omni"].contains(&id) {
+                    continue;
+                }
+                if settings["startupMode"] == "hybrid" && id == "omni" {
+                    continue;
+                }
+                if id == "guardian"
+                    && settings["approvalMode"] != "approveForMe"
+                    && !started.guardian_wanted()
+                {
+                    continue;
+                }
                 if backends::installed(&started.data, &settings, id) {
-                    let _ = backends::action(&started, id, "start").await;
+                    let result = backends::automatic_start(&started, id, !omni_failed, true).await;
+                    if id == "omni" && settings["startupMode"] == "auto" {
+                        if result.as_ref().is_some_and(|r| !r.status().is_success()) {
+                            omni_failed = true;
+                        } else if result.is_some() {
+                            // Let memory allocation and readiness settle before admitting text.
+                            // The backend can take two 120-second attempts with CPU fallback.
+                            for _ in 0..1250 {
+                                if started.backends.running("omni")
+                                    || !started.backends.active("omni")
+                                {
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            }
+                            omni_failed = !started.backends.active("omni");
+                        }
+                    }
                 }
             }
         });

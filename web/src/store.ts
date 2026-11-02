@@ -26,7 +26,7 @@ type State = {
   parts: Part[];
   busy: boolean;
   guardianWanted: boolean;
-  machine: { memoryGB: number };
+  machine: { memoryGB: number; availableMemoryBytes?: number | null };
   memory: string[];
   ideas: { at: number; items: Idea[] };
   routines: Routine[];
@@ -262,5 +262,5 @@ export const pendingApprovals = (chats: Chat[], chatId?: string) => {
   return out;
 };
 
-export const modelsReady = (parts: Part[]) => parts.some((p) => (p.id === "small" || p.id === "omni") && p.status === "running");
+export const modelsReady = (parts: Part[]) => parts.some((p) => (p.id === "small" || p.id === "omni") && (p.status === "running" || p.onDemand));
 export const part = (parts: Part[], id: Part["id"]) => parts.find((p) => p.id === id);

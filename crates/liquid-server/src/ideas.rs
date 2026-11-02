@@ -87,6 +87,12 @@ pub async fn refresh(app: &App) -> Response {
         app.emit(json!({"type":"ideas","ideas":ideas}));
         return json_response(ideas);
     }
+    let Some(_model_use) = app.backends.begin_model_use() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The model is changing. Try again shortly.",
+        );
+    };
     if !app.backends.running("small") {
         return error(StatusCode::SERVICE_UNAVAILABLE, strings.ideas_need_brain);
     }
