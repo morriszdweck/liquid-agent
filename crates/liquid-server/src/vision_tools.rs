@@ -2,7 +2,6 @@
 use crate::{media, platform, store, App};
 use anyhow::{bail, Context, Result};
 use std::{
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -16,7 +15,11 @@ impl Scratch {
     pub(crate) fn new() -> Result<Self> {
         let path = std::env::temp_dir().join(format!("liquid-agent-{}", store::id()));
         std::fs::create_dir(&path)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+        }
         Ok(Self(path))
     }
     fn file(&self, name: &str) -> PathBuf {

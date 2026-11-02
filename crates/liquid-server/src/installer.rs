@@ -487,8 +487,16 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
     } else {
         "x64"
     };
-    let cpu = format!("bin-ubuntu-{arch}.tar.gz");
-    let vulkan = format!("bin-ubuntu-vulkan-{arch}.tar.gz");
+    let cpu = if cfg!(windows) {
+        format!("bin-win-cpu-{arch}.zip")
+    } else {
+        format!("bin-ubuntu-{arch}.tar.gz")
+    };
+    let vulkan = if cfg!(windows) {
+        format!("bin-win-vulkan-{arch}.zip")
+    } else {
+        format!("bin-ubuntu-vulkan-{arch}.tar.gz")
+    };
     let mac = format!("bin-macos-{arch}.tar.gz");
     let want_vulkan = !cfg!(target_os = "macos")
         && (std::env::var("LIQUID_AGENT_GPU").as_deref() == Ok("vulkan")
@@ -547,38 +555,13 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
             std::fs::remove_dir_all(&stage)?;
         }
         std::fs::create_dir_all(&stage)?;
-        let decoder = flate2::read::GzDecoder::new(std::fs::File::open(&archive_for_extract)?);
-        let mut tar = tar::Archive::new(decoder);
-        let mut total = 0u64;
-        for entry in tar.entries()? {
-            if token.is_cancelled() {
-                bail!("Cancelled");
-            }
-            let mut entry = entry?;
-            let path = entry.path()?;
-            if path
-                .components()
-                .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
-            {
-                bail!("Unsafe engine archive path.");
-            }
-            if let Some(link) = entry.link_name()? {
-                if link
-                    .components()
-                    .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
-                {
-                    bail!("Unsafe engine archive link.");
-                }
-            }
-            total = total
-                .checked_add(entry.size())
-                .context("Engine archive is too large")?;
-            if total > 2_000_000_000 {
-                bail!("Engine archive is too large.");
-            }
-            if !entry.unpack_in(&stage)? {
-                bail!("Unsafe engine archive entry.");
-            }
+        if archive_for_extract
+            .extension()
+            .is_some_and(|ext| ext == "zip")
+        {
+            extract_engine_zip(&archive_for_extract, &stage, &token)?;
+        } else {
+            extract_engine_tar(&archive_for_extract, &stage, &token)?;
         }
         if token.is_cancelled() {
             bail!("Cancelled");
@@ -587,17 +570,19 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
             .follow_links(false)
             .into_iter()
             .filter_map(Result::ok)
-            .any(|e| e.file_type().is_file() && e.file_name() == "llama-server")
+            .any(|e| {
+                e.file_type().is_file()
+                    && e.file_name()
+                        == if cfg!(windows) {
+                            "llama-server.exe"
+                        } else {
+                            "llama-server"
+                        }
+            })
         {
             bail!("The download didn't contain llama-server.");
         }
         let target = data.join("engine");
-        if target.exists() {
-            if std::fs::read_dir(&target)?.next().is_some() {
-                bail!("The engine folder is not empty; remove the existing engine first.");
-            }
-            std::fs::remove_dir(&target)?;
-        }
         std::fs::write(
             stage.join(".flavor"),
             if asset_name.contains("vulkan") {
@@ -609,7 +594,7 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
             },
         )?;
         std::fs::write(stage.join(".version"), ENGINE_TAG)?;
-        std::fs::rename(&stage, &target)?;
+        replace_engine(&stage, &target)?;
         let _ = std::fs::remove_file(&archive_for_extract);
         Ok(())
     })
@@ -618,6 +603,76 @@ async fn install_engine(app: &App, cancel: &CancellationToken) -> Result<()> {
         let _ = tokio::fs::remove_file(&archive).await;
     }
     extraction?;
+    Ok(())
+}
+
+fn extract_engine_tar(archive: &Path, stage: &Path, token: &CancellationToken) -> Result<()> {
+    let decoder = flate2::read::GzDecoder::new(std::fs::File::open(archive)?);
+    let mut tar = tar::Archive::new(decoder);
+    let mut total = 0u64;
+    for entry in tar.entries()? {
+        anyhow::ensure!(!token.is_cancelled(), "Cancelled");
+        let mut entry = entry?;
+        let path = entry.path()?;
+        anyhow::ensure!(
+            path.components()
+                .all(|c| matches!(c, Component::Normal(_) | Component::CurDir)),
+            "Unsafe engine archive path."
+        );
+        if let Some(link) = entry.link_name()? {
+            anyhow::ensure!(
+                link.components()
+                    .all(|c| matches!(c, Component::Normal(_) | Component::CurDir)),
+                "Unsafe engine archive link."
+            );
+        }
+        total = total
+            .checked_add(entry.size())
+            .context("Engine archive is too large")?;
+        anyhow::ensure!(total <= 2_000_000_000, "Engine archive is too large.");
+        anyhow::ensure!(entry.unpack_in(stage)?, "Unsafe engine archive entry.");
+    }
+    Ok(())
+}
+
+fn extract_engine_zip(archive: &Path, stage: &Path, token: &CancellationToken) -> Result<()> {
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(archive)?)?;
+    let mut total = 0u64;
+    for i in 0..zip.len() {
+        anyhow::ensure!(!token.is_cancelled(), "Cancelled");
+        let mut entry = zip.by_index(i)?;
+        let path = entry
+            .enclosed_name()
+            .context("Unsafe engine archive path.")?;
+        anyhow::ensure!(!entry.is_symlink(), "Unsafe engine archive entry.");
+        total = total
+            .checked_add(entry.size())
+            .context("Engine archive is too large")?;
+        anyhow::ensure!(total <= 2_000_000_000, "Engine archive is too large.");
+        let dest = stage.join(path);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&dest)?;
+        } else {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut file = std::fs::File::create(dest)?;
+            std::io::copy(&mut entry, &mut file)?;
+        }
+    }
+    Ok(())
+}
+
+fn replace_engine(stage: &Path, target: &Path) -> Result<()> {
+    if !target.exists() {
+        return Ok(std::fs::rename(stage, target)?);
+    }
+    let backup = target.with_file_name(format!("engine.backup-{}", crate::store::id()));
+    std::fs::rename(target, &backup).context("Couldn't preserve the existing engine folder")?;
+    if let Err(error) = std::fs::rename(stage, target) {
+        std::fs::rename(&backup, target).context("Couldn't restore the previous engine folder")?;
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -709,4 +764,68 @@ async fn install_custom(app: &App, cancel: &CancellationToken) -> Result<()> {
     custom["meta"] = json!({"architecture":meta.architecture,"contextLength":meta.context_length,"hasTemplate":meta.has_template,"thinking":meta.thinking,"name":meta.name});
     crate::store::save(&app.data, "custom-model.json", &custom)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod engine_install_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn extracts_windows_zip_and_preserves_previous_engine() -> Result<()> {
+        let root = std::env::current_dir()?
+            .join("target")
+            .join(format!("engine-test-{}", crate::store::id()));
+        std::fs::create_dir_all(&root)?;
+        let archive = root.join("engine.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive)?);
+        zip.start_file(
+            "bin/llama-server.exe",
+            zip::write::SimpleFileOptions::default(),
+        )?;
+        zip.write_all(b"windows engine")?;
+        zip.finish()?;
+        let stage = root.join("engine.installing");
+        std::fs::create_dir(&stage)?;
+        extract_engine_zip(&archive, &stage, &CancellationToken::new())?;
+        let target = root.join("engine");
+        std::fs::create_dir(&target)?;
+        std::fs::write(target.join("old-file"), b"keep")?;
+        replace_engine(&stage, &target)?;
+        assert_eq!(
+            std::fs::read(target.join("bin/llama-server.exe"))?,
+            b"windows engine"
+        );
+        let backup = std::fs::read_dir(&root)?
+            .filter_map(Result::ok)
+            .find(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("engine.backup-")
+            })
+            .unwrap()
+            .path();
+        assert_eq!(std::fs::read(backup.join("old-file"))?, b"keep");
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_zip_path_traversal() -> Result<()> {
+        let root = std::env::current_dir()?
+            .join("target")
+            .join(format!("engine-test-{}", crate::store::id()));
+        std::fs::create_dir_all(&root)?;
+        let archive = root.join("bad.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive)?);
+        zip.start_file("../escape", zip::write::SimpleFileOptions::default())?;
+        zip.write_all(b"bad")?;
+        zip.finish()?;
+        let stage = root.join("stage");
+        std::fs::create_dir(&stage)?;
+        assert!(extract_engine_zip(&archive, &stage, &CancellationToken::new()).is_err());
+        assert!(!root.join("escape").exists());
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
 }

@@ -575,7 +575,15 @@ fn data_dir() -> PathBuf {
     {
         return PathBuf::from(dir);
     }
-    let home = PathBuf::from(env::var_os("HOME").unwrap_or_else(|| ".".into()));
+    #[cfg(windows)]
+    if let Some(base) = env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(base).join("LiquidAgent");
+    }
+    let home = PathBuf::from(
+        env::var_os("HOME")
+            .or_else(|| env::var_os("USERPROFILE"))
+            .unwrap_or_else(|| ".".into()),
+    );
     if cfg!(target_os = "macos") {
         return home.join("Library/Application Support/LiquidAgent");
     }
@@ -591,6 +599,7 @@ pub(crate) async fn shutdown(app: &App) {
     std::process::exit(0);
 }
 
+#[cfg(unix)]
 async fn wait_for_stop() {
     use tokio::signal::unix::{signal, SignalKind};
     let mut terminate = signal(SignalKind::terminate()).expect("SIGTERM handler");
@@ -600,6 +609,11 @@ async fn wait_for_stop() {
         _ = terminate.recv() => {}
         _ = hangup.recv() => {}
     }
+}
+
+#[cfg(windows)]
+async fn wait_for_stop() {
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// Is a Liquid Agent already answering on this port?

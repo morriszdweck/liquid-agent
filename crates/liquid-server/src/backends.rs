@@ -199,7 +199,15 @@ pub(crate) fn engine(data: &Path) -> Option<PathBuf> {
         .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
-        .find(|e| e.file_type().is_file() && e.file_name() == "llama-server")
+        .find(|e| {
+            e.file_type().is_file()
+                && e.file_name()
+                    == if cfg!(windows) {
+                        "llama-server.exe"
+                    } else {
+                        "llama-server"
+                    }
+        })
         .map(|e| e.into_path())
 }
 fn guardian_binary() -> Option<PathBuf> {
@@ -1383,10 +1391,18 @@ async fn free_port(data: &Path, port: u16) -> bool {
     {
         return false;
     }
+    #[cfg(unix)]
     for (pid, _) in &found {
         unsafe {
             libc::kill(*pid as i32, libc::SIGTERM);
         }
+    }
+    #[cfg(windows)]
+    for (pid, _) in &found {
+        let _ = tokio::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output()
+            .await;
     }
     tokio::time::sleep(Duration::from_millis(600)).await;
     true
@@ -1406,11 +1422,14 @@ pub(crate) async fn stop_process(app: &App, id: &str) -> Response {
     if let Some(mut child) = children.remove(id) {
         if id == "browser" {
             // Asked to stop, the bridge closes its browser first; only a stuck one is killed.
+            #[cfg(unix)]
             if let Some(pid) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
                 unsafe {
                     libc::kill(pid, libc::SIGTERM);
                 }
             }
+            #[cfg(windows)]
+            let _ = child.kill().await;
             if tokio::time::timeout(Duration::from_secs(3), child.wait())
                 .await
                 .is_err()

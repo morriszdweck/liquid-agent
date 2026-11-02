@@ -1,7 +1,6 @@
 //! Desktop integration using native programs, without constructing shell commands.
 use anyhow::{bail, Context, Result};
 use std::{
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -9,10 +8,20 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 pub(crate) fn has(name: &str) -> bool {
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).any(|dir| {
-        std::fs::metadata(dir.join(name))
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        let path = dir.join(name);
+        #[cfg(unix)]
+        {
+            std::fs::metadata(path)
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(windows)]
+        {
+            path.is_file() || path.with_extension("exe").is_file()
+        }
     })
 }
 pub(crate) fn desktop() -> Result<()> {

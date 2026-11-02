@@ -18,9 +18,11 @@ fn local_minute() -> Option<(String, i64)> {
         .try_into()
         .ok()?;
     let mut output = std::mem::MaybeUninit::<libc::tm>::uninit();
-    // localtime_r writes a complete tm for a valid timestamp and respects the local timezone.
-    let result = unsafe { libc::localtime_r(&stamp, output.as_mut_ptr()) };
-    if result.is_null() {
+    #[cfg(unix)]
+    let failed = unsafe { libc::localtime_r(&stamp, output.as_mut_ptr()).is_null() };
+    #[cfg(windows)]
+    let failed = unsafe { libc::localtime_s(output.as_mut_ptr(), &stamp) != 0 };
+    if failed {
         return None;
     }
     let output = unsafe { output.assume_init() };

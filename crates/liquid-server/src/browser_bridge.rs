@@ -293,6 +293,7 @@ impl Browser {
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
         // Chrome refuses to run as root without its sandbox turned off.
+        #[cfg(unix)]
         if unsafe { libc::geteuid() } == 0 {
             command.arg("--no-sandbox");
         }
@@ -627,17 +628,7 @@ pub async fn run() -> Result<()> {
     let stop = CancellationToken::new();
     let stopping = stop.clone();
     tokio::spawn(async move {
-        use tokio::signal::unix::{signal, SignalKind};
-        if let (Ok(mut term), Ok(mut hup)) = (
-            signal(SignalKind::terminate()),
-            signal(SignalKind::hangup()),
-        ) {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
-                _ = hup.recv() => {}
-            }
-        }
+        crate::wait_for_stop().await;
         stopping.cancel();
     });
     axum::serve(listener, app)
@@ -757,12 +748,15 @@ fn extract(archive: &Path, into: &Path) -> Result<()> {
         let mut file = std::fs::File::create(&out)?;
         std::io::copy(&mut entry, &mut file)?;
         drop(file);
-        use std::os::unix::fs::PermissionsExt;
-        let mut mode = entry.unix_mode().unwrap_or(0o644) | 0o600;
-        if out.file_name().is_some_and(|name| name == BINARY) {
-            mode |= 0o755;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut mode = entry.unix_mode().unwrap_or(0o644) | 0o600;
+            if out.file_name().is_some_and(|name| name == BINARY) {
+                mode |= 0o755;
+            }
+            std::fs::set_permissions(&out, std::fs::Permissions::from_mode(mode & 0o777))?;
         }
-        std::fs::set_permissions(&out, std::fs::Permissions::from_mode(mode & 0o777))?;
     }
     Ok(())
 }

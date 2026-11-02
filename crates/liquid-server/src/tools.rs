@@ -156,8 +156,11 @@ async fn drain(mut input: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
     Ok(result)
 }
 async fn shell(command: &str, cwd: &Path, cancel: &CancellationToken) -> Result<String> {
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt;
+    #[cfg(unix)]
     let own = std::env::var("SHELL").unwrap_or_default();
+    #[cfg(unix)]
     let shell = if cfg!(target_os = "macos") {
         "/bin/zsh"
     } else if (own.ends_with("/bash") || own.ends_with("/zsh")) && Path::new(&own).is_file() {
@@ -167,10 +170,19 @@ async fn shell(command: &str, cwd: &Path, cancel: &CancellationToken) -> Result<
     } else {
         "/bin/sh"
     };
+    #[cfg(windows)]
+    let shell = "powershell.exe";
     let mut builder = tokio::process::Command::new(shell);
+    #[cfg(unix)]
     builder.as_std_mut().process_group(0);
     let mut child = builder
-        .arg(if shell.ends_with("/sh") { "-c" } else { "-lc" })
+        .arg(if cfg!(windows) {
+            "-Command"
+        } else if shell.ends_with("/sh") {
+            "-c"
+        } else {
+            "-lc"
+        })
         .arg(command)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -206,6 +218,7 @@ impl Drop for ShellGroup {
         terminate_group(self.0);
     }
 }
+#[cfg(unix)]
 fn terminate_group(pid: Option<u32>) {
     if let Some(pid) = pid
         .and_then(|pid| i32::try_from(pid).ok())
@@ -215,6 +228,14 @@ fn terminate_group(pid: Option<u32>) {
         unsafe {
             libc::kill(-pid, libc::SIGKILL);
         }
+    }
+}
+#[cfg(windows)]
+fn terminate_group(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
     }
 }
 async fn browser(

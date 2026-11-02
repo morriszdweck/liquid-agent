@@ -15,7 +15,6 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Write,
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{atomic::Ordering, Mutex},
@@ -85,12 +84,18 @@ pub fn server_binary_name() -> String {
     format!("liquid-server-{}", native())
 }
 
+#[cfg(unix)]
 fn writable(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
         return false;
     };
     unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+}
+
+#[cfg(windows)]
+fn writable(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|m| !m.permissions().readonly())
 }
 
 impl Updater {
@@ -412,7 +417,13 @@ pub fn apply(app: &App) -> Value {
     let started = (|| -> Result<()> {
         let (out, err) = log?;
         let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--open").collect();
-        Command::new(&guardian)
+        let mut command = Command::new(&guardian);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        command
             .arg("--handover")
             .arg(std::process::id().to_string())
             .arg(&u.root)
@@ -423,7 +434,6 @@ pub fn apply(app: &App) -> Value {
             .stdin(Stdio::null())
             .stdout(Stdio::from(out))
             .stderr(Stdio::from(err))
-            .process_group(0)
             .spawn()
             .with_context(|| format!("Couldn't restart to update: {}", guardian.display()))?;
         Ok(())
