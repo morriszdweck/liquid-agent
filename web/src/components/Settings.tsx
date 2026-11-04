@@ -597,6 +597,9 @@ export function Setup() {
   const size = SIZES.find((x) => x.id === sizeId)!;
   const installing = busy || parts.some((p) => p.status === "installing");
   const failed = parts.filter((p) => p.status === "failed");
+  // A helper that failed to start (say its port is taken) mustn't hide the welcome screen:
+  // retrying it alone would never get the brain, so setup could never finish.
+  const stuck = failed.some((p) => ["engine", "small", "omni"].includes(p.id));
 
   const go = async () => {
     try {
@@ -609,7 +612,7 @@ export function Setup() {
     }
   };
 
-  if (installing || failed.length) {
+  if (installing || stuck) {
     const shown = parts.filter((p) => p.status !== "missing" || p.queued);
     const total = shown.reduce((sum, p) => sum + p.bytes, 0);
     const done = shown.reduce(

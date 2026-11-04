@@ -15,14 +15,17 @@ const ROOT = path.join(os.homedir(), ".liquid-agent");
 const SERVER = path.join(ROOT, "app", "server", "index.js");
 const DATA = path.join(os.homedir(), "Library", "Application Support", "LiquidAgent");
 const INSTALLER = "https://raw.githubusercontent.com/morriszdweck/liquid-agent/main/install.sh";
+const LOG = path.join(DATA, "logs", "server.log");
 
 let win = null;
 
 // The title bar look, applied by the app itself so it doesn't wait for the
 // agent to update: the top bars move the window, and the traffic lights take
-// the place of the logo and name.
+// the place of the logo and name. The setup and loading screens have no top
+// bar, so a thin strip at the top moves the window there.
 const TITLE_BAR_CSS = `
   .sidebar-head, .topbar { -webkit-app-region: drag; }
+  .setup::before, .splash::before { content: ""; position: fixed; inset: 0 0 auto 0; height: 38px; -webkit-app-region: drag; }
   .sidebar-head :is(button, a, input, select, [role="button"]),
   .topbar :is(button, a, input, select, [role="button"], .topbar-title) { -webkit-app-region: no-drag; }
   .sidebar-head { justify-content: flex-end; }
@@ -62,8 +65,8 @@ function installedNode() {
 function startServer() {
   const node = installedNode();
   if (!node) throw new Error("Couldn't find Node.js for Liquid Agent. Reinstall it from liquid-agent.mincoffical.codes.");
-  fs.mkdirSync(path.join(DATA, "logs"), { recursive: true });
-  const log = fs.openSync(path.join(DATA, "logs", "server.log"), "a");
+  fs.mkdirSync(path.dirname(LOG), { recursive: true });
+  const log = fs.openSync(LOG, "a");
   // Detached, like the liquid-agent command, so it keeps running reminders and routines on its own schedule.
   spawn(node, [SERVER], { detached: true, stdio: ["ignore", log, log], env: { ...process.env, LIQUID_AGENT_PORT: String(PORT) } }).unref();
   startedServer = true;
@@ -116,6 +119,13 @@ function createWindow() {
     if (isLocal(win.webContents.getURL())) win.webContents.insertCSS(TITLE_BAR_CSS).catch(() => {});
   });
   win.on("closed", () => (win = null));
+  // The setup screen's buttons.
+  win.webContents.on("did-navigate-in-page", (_event, url) => {
+    if (!url.startsWith("file:")) return;
+    const hash = new URL(url).hash;
+    if (hash.startsWith("#retry")) open();
+    else if (hash.startsWith("#log")) shell.openPath(LOG);
+  });
   // Links out of the app open in the default browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
@@ -129,7 +139,19 @@ function createWindow() {
   return win;
 }
 
+let opening = false;
+
 async function open() {
+  if (opening) return;
+  opening = true;
+  try {
+    await show();
+  } finally {
+    opening = false;
+  }
+}
+
+async function show() {
   const w = win ?? createWindow();
   const say = (text) => w.webContents.executeJavaScript(`window.say && window.say(${JSON.stringify(text)})`).catch(() => {});
   if (await running()) return w.loadURL(ORIGIN);
@@ -143,10 +165,12 @@ async function open() {
       say("Starting Liquid Agent…");
       startServer();
     }
-    if (!(await waitUntilRunning(60))) throw new Error(`Liquid Agent didn't start. Its log is in ${path.join(DATA, "logs", "server.log")}.`);
+    // The first start can be slow while macOS checks the new files.
+    if (!(await waitUntilRunning(120))) throw new Error("Liquid Agent didn't start.");
     await w.loadURL(ORIGIN);
   } catch (e) {
-    w.webContents.executeJavaScript(`window.failed && window.failed(${JSON.stringify(String(e?.message ?? e))})`).catch(() => {});
+    const text = JSON.stringify(String(e?.message ?? e));
+    w.webContents.executeJavaScript(`window.failed && window.failed(${text}, ${fs.existsSync(LOG)})`).catch(() => {});
   }
 }
 

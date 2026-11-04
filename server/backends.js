@@ -7,6 +7,7 @@ import path from "node:path";
 import os from "node:os";
 import { DATA, DEVICE, DIRS, IS_MAC, QUANTS, ROOT, bus, bytesText, load, run, save, settings, sleep } from "./core.js";
 import { hfHeaders, modelError, probeGGUF, resolveHfModel } from "./models.js";
+import { download } from "./download.js";
 import { linuxGPU, listeners } from "./platform.js";
 
 export const PARTS = {
@@ -185,42 +186,6 @@ function findEngine() {
     }
   }
   return null;
-}
-
-/** Streams a file to disk with progress, resuming a partial download when the server allows it. */
-async function download(url, dest, { onProgress, signal, headers } = {}) {
-  const part = dest + ".part";
-  let start = fs.existsSync(part) ? fs.statSync(part).size : 0;
-  const res = await fetch(url, { signal, headers: { ...headers, ...(start ? { Range: `bytes=${start}-` } : {}) } });
-  if (res.status === 416) {
-    fs.renameSync(part, dest);
-    return;
-  }
-  if (!res.ok) {
-    if (res.status === 401 || res.status === 403) throw new Error("This model is private or gated. Accept its terms on Hugging Face, or set HF_TOKEN and restart Liquid Agent.");
-    throw new Error(`Download failed (HTTP ${res.status}). Check your internet and try again.`);
-  }
-  if (res.status !== 206) start = 0;
-  const total = start + (Number(res.headers.get("content-length")) || 0);
-  const file = fs.createWriteStream(part, { flags: start ? "a" : "w" });
-  let done = start;
-  let last = 0;
-  try {
-    for await (const chunk of res.body) {
-      done += chunk.length;
-      if (!file.write(chunk)) await new Promise((r) => file.once("drain", r));
-      if (Date.now() - last > 250) {
-        last = Date.now();
-        onProgress?.(done, total);
-      }
-    }
-    await new Promise((resolve, reject) => file.end((e) => (e ? reject(e) : resolve())));
-  } catch (e) {
-    file.destroy();
-    throw e;
-  }
-  onProgress?.(done, total);
-  fs.renameSync(part, dest);
 }
 
 class Backends {
@@ -541,11 +506,11 @@ class Backends {
 
   progress(id, label) {
     const live = this.states[id]?.live === true;
-    return (done, total) =>
+    return (done, total, note) =>
       this.set(id, {
         status: "installing",
         live,
-        text: total ? `${label} ${bytesText(done)} of ${bytesText(total)}` : `${label} ${bytesText(done)}`,
+        text: note ?? (total ? `${label} ${bytesText(done)} of ${bytesText(total)}` : `${label} ${bytesText(done)}`),
         fraction: total ? done / total : undefined,
       });
   }
@@ -958,6 +923,9 @@ function friendly(e) {
   const text = String(e?.message ?? e);
   if (/private or gated/.test(text)) return text;
   if (/ENOTFOUND|EAI_AGAIN|fetch failed|ECONNRESET/i.test(text)) return "Couldn't reach the internet. Check your Wi-Fi, then click Try again.";
+  // What's left after the download's own retries: the connection kept dropping or stalling.
+  if (/terminated|stalled|dropped|other side closed|socket|ETIMEDOUT|ECONNREFUSED|UND_ERR/i.test(text))
+    return "The connection kept dropping, so the download stopped. Check your internet, then click Try again. It picks up where it left off.";
   if (/ENOSPC/i.test(text)) return `Your ${DEVICE} is out of disk space. Free some space, then click Try again.`;
   return text.slice(0, 300);
 }
