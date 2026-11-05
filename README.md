@@ -11,6 +11,7 @@ A private AI agent for your Mac or Linux computer that runs **LFM3 1.7B** and **
 - **Choose project**: the button under the message box ties a chat to one folder. The agent then works only there: file tools refuse paths outside it, and shell commands run in a sandbox that can write only inside the folder and can't read the rest of your home folder (`sandbox-exec` on macOS, [bubblewrap](https://github.com/containers/bubblewrap) on Linux; without bubblewrap, commands that name a path outside the folder are refused and every command asks you first). Recent projects are one click away.
 - **Memory and For You**: it learns small facts about you, uses only the relevant ones (to keep prompts short) and suggests ideas based on them.
 - **Routines** you can run with one click or on a schedule, and an **Activity** log of every action and who approved it.
+- **Remote control** at [liquid-rc.mincoffical.codes](https://liquid-rc.mincoffical.codes): turn it on in Settings → Remote, scan the QR code, and use Liquid Agent from your phone or any browser: chats, voice chat (your phone's microphone and speaker), pictures, a look at your computer's screen, routines and the rest. On a phone it looks and feels like an app, and you can add it to your Home Screen. Liquid Agent dials out to a relay and everything is end-to-end encrypted (AES-256-GCM) with a key that only lives in the pairing link, so the relay sees scrambled data. Nothing on your computer listens to the network.
 - **One-click downloads** inside the app, with a choice of model size (Smaller, Balanced, Best, or any GGUF quant in Settings). The app still routes each message itself.
 
 Everything stays on your computer. The only network traffic is the one-time downloads and web searches you ask for.
@@ -90,9 +91,10 @@ browser ──HTTP/WebSocket──▶ server/ (Node, 127.0.0.1:8170)
 - `server/models.js` reads Hugging Face links, finds and groups GGUF files, picks a size for this computer and checks a model's header before it runs.
 - `server/prompt.js` keeps prompts small: a short system prompt, only relevant memories, and older tool results trimmed to fit the context budget.
 - `server/voice.js` bridges the browser microphone to Omni's realtime API and runs tools in the middle of a conversation.
+- `server/remote.js` is remote control: it keeps an outbound WebSocket to the relay (`relay/rc_relay.py`) and replays encrypted requests and sockets (live updates, voice audio) from paired browsers against the local server. `relay/site/` is the page at liquid-rc.mincoffical.codes, which loads the app from your computer through that tunnel.
 - `web/` is a React app built with Vite into `web/dist`, which the server hosts.
 
-The server only accepts requests from this computer, from its own page, carrying a token that changes every launch.
+The server only accepts requests from this computer, from its own page, carrying a token that changes every launch. Remote devices reach it only through the encrypted tunnel, and can't turn remote control off or make new links.
 
 ## Develop
 

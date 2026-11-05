@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { ChevronLeft, Folder, FolderOpen, FolderPlus, LogOut, X } from "lucide-react";
-import { api } from "../api";
+import { api, isRemote } from "../api";
 import { errorToast, useStore } from "../store";
 import type { Chat } from "../types";
 import { cx } from "../util";
@@ -56,6 +56,8 @@ export function ProjectPicker({ chat }: { chat?: Chat }) {
 
   async function choose() {
     if (picking) return;
+    // Remotely, the computer's own folder picker would open on the computer: browse in the page.
+    if (isRemote) return setBrowse(true);
     setPicking(true);
     try {
       const r = await api<{ path?: string | null; noPicker?: boolean }>("POST", "/api/projects/pick");

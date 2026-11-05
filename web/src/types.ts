@@ -163,7 +163,10 @@ export type Update = {
   checkedAt: number;
 };
 
+export type RemoteInfo = { enabled: boolean; status: "off" | "connecting" | "online"; link: string; devices: number };
+
 export type Snapshot = {
+  remote?: RemoteInfo;
   chats: Chat[];
   running: string[];
   settings: Settings;

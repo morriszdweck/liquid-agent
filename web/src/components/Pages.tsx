@@ -438,7 +438,7 @@ export function Activity() {
       {list.length ? (
         <div className="list">
           {list.map((a) => (
-            <button key={a.id} className="list-row clickable" onClick={() => go(`#/chat/${a.chatId}`)}>
+            <button key={a.id} className="list-row clickable activity-row" onClick={() => go(`#/chat/${a.chatId}`)}>
               <ToolIcon tool={a.tool} />
               <span className="list-main">{a.label}</span>
               {a.decision && (

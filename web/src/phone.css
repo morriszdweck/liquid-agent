@@ -1,0 +1,1490 @@
+/* Liquid Agent on a phone: the same screens, dressed like an iPhone app. A frosted bar on
+   top with the title in the middle, a drawer you swipe open, the message box
+   at the bottom, Settings as grouped lists, sheets and action sheets that come
+   up from the bottom. Everything sits behind the phone test that phone.ts and
+   styles.css use, so computers keep the desktop look. */
+
+:root,
+:root[data-theme="light"] {
+  --grp: #f2f2f7;
+  --cell: #ffffff;
+  --sep: rgba(60, 60, 67, 0.17);
+  --fill: rgba(118, 118, 128, 0.12);
+  --fill-2: rgba(118, 118, 128, 0.22);
+  --bar: rgba(255, 255, 255, 0.78);
+  --tint: #007aff;
+  --switch-on: #34c759;
+  --nav: 48px;
+  --drawer-w: min(84vw, 330px);
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+}
+:root[data-theme="dark"] {
+  --grp: #1c1c1e;
+  --cell: #2c2c2e;
+  --sep: rgba(84, 84, 88, 0.6);
+  --fill: rgba(118, 118, 128, 0.24);
+  --fill-2: rgba(118, 118, 128, 0.36);
+  --bar: rgba(18, 18, 19, 0.76);
+  --tint: #0a84ff;
+  --switch-on: #30d158;
+}
+
+.phone-only {
+  display: none !important;
+}
+
+@media (max-width: 820px), (max-height: 500px) and (pointer: coarse) {
+  body {
+    font-size: 16px;
+  }
+  .phone-only {
+    display: flex !important;
+  }
+
+  /* ---- Frame and drawer: the page slides right to show the chats ---- */
+  .app {
+    overflow: hidden;
+  }
+  .main {
+    transition: transform 0.4s var(--ease-ios);
+  }
+  .app:has(.sidebar.open) .main {
+    transform: translateX(var(--drawer-w));
+    box-shadow: -0.5px 0 0 var(--sep);
+  }
+  .sidebar {
+    width: var(--drawer-w);
+    background: var(--bg);
+    border-radius: 0;
+    box-shadow: none;
+    transform: translateX(-100%);
+    transition: transform 0.4s var(--ease-ios);
+  }
+  .sidebar.open {
+    transform: none;
+  }
+  .sidebar-scrim {
+    background: rgba(0, 0, 0, 0.22);
+    transition: opacity 0.4s var(--ease-ios);
+  }
+  /* While a finger drags the drawer, it follows the finger (phone.ts sets --drawer). */
+  .app.dragging .main {
+    transform: translateX(calc(var(--drawer, 0) * var(--drawer-w)));
+    transition: none;
+  }
+  .app.dragging .sidebar {
+    transform: translateX(calc((var(--drawer, 0) - 1) * 100%));
+    transition: none;
+  }
+  .app.dragging .sidebar-scrim {
+    opacity: var(--drawer, 0);
+    transition: none;
+  }
+
+  .sidebar-head {
+    height: 58px;
+    padding: 10px 20px 4px;
+  }
+  .sidebar-head .icon-btn {
+    display: none !important;
+  }
+  .sidebar-head .logo {
+    font-size: 27px !important;
+  }
+  .search {
+    order: 1;
+    height: 38px;
+    margin: 6px 16px 10px;
+    padding: 0 10px;
+    gap: 6px;
+    border: 0;
+    border-radius: 11px;
+    background: var(--fill);
+  }
+  .search:focus-within {
+    border: 0;
+    background: var(--fill);
+  }
+  .search > svg {
+    width: 17px;
+    height: 17px;
+  }
+  .search input {
+    font-size: 17px;
+  }
+  .search input::placeholder {
+    color: var(--fg-3);
+  }
+  .nav {
+    order: 2;
+    gap: 0;
+    padding: 0 10px;
+  }
+  .recents {
+    order: 3;
+    padding: 0 10px 10px;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+  .composer textarea {
+    scrollbar-width: none;
+  }
+  .sidebar-foot {
+    order: 4;
+    padding: 6px 10px;
+    border-top: 0.5px solid var(--sep);
+  }
+  .nav-row {
+    height: 46px;
+    gap: 14px;
+    padding: 0 12px;
+    border-radius: 12px;
+    font-size: 17px;
+  }
+  .nav-row > svg {
+    width: 21px;
+    height: 21px;
+    color: var(--fg);
+  }
+  .nav-row kbd {
+    display: none;
+  }
+  .nav-row.active,
+  .chat-row.active {
+    background: var(--fill);
+  }
+  .recents-label {
+    padding: 20px 12px 6px;
+    color: var(--fg-3);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .recents-empty {
+    padding: 18px 12px;
+    font-size: 15px;
+  }
+  .chat-row {
+    border-radius: 12px;
+  }
+  .chat-row-main {
+    height: 46px;
+    padding: 0 12px;
+    font-size: 16px;
+  }
+  .chat-row.editing input {
+    height: 46px;
+    border-radius: 12px;
+    font-size: 17px;
+  }
+  .model-status {
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+  .profile {
+    height: 52px;
+    padding: 0 12px 0 8px;
+    border-radius: 12px;
+  }
+  .avatar {
+    width: 34px;
+    height: 34px;
+    font-size: 15px;
+  }
+  .profile-name {
+    font-size: 16px;
+  }
+
+  /* ---- The bar on top: frosted, title in the middle, content scrolls under it ---- */
+  .page > .topbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0;
+    height: calc(var(--nav) + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 4px 0;
+    box-shadow: 0 0.5px 0 transparent;
+    transition: box-shadow 0.2s;
+  }
+  /* The frost lives on a layer of its own: a blur on the bar itself would trap
+     the bar's menus, which are fixed to the screen. */
+  .page > .topbar::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--bar);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  .page.scrolled > .topbar {
+    box-shadow: 0 0.5px 0 var(--sep);
+  }
+  .desktop .page > .topbar {
+    padding-left: 80px;
+  }
+  .topbar-left,
+  .topbar-right {
+    flex: none;
+    gap: 0;
+  }
+  .topbar-right {
+    margin-left: auto;
+  }
+  .topbar .icon-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    color: var(--fg);
+  }
+  .topbar-left > :not(.icon-btn),
+  .topbar-center {
+    position: absolute;
+    top: env(safe-area-inset-top);
+    bottom: 0;
+    left: 56px;
+    right: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    pointer-events: none;
+  }
+  .topbar-left > :not(.icon-btn) > *,
+  .topbar-center > * {
+    pointer-events: auto;
+  }
+  .topbar-left > input.topbar-rename {
+    pointer-events: auto;
+    top: calc(env(safe-area-inset-top) + 6px);
+    bottom: auto;
+    width: auto;
+    height: 36px;
+    text-align: center;
+    font-size: 17px;
+  }
+  .topbar-title {
+    height: 36px;
+    padding: 0 10px;
+    border-radius: 10px;
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .topbar-title svg {
+    width: 15px;
+    height: 15px;
+  }
+  /* A plain title (no menu) is the centered layer itself, so it fills the bar. */
+  .topbar-left > div.topbar-title {
+    height: auto;
+  }
+  /* Voice chat: "On this computer" doesn't fit beside a centered title. */
+  .voice > .topbar .topbar-right > .pill {
+    display: none;
+  }
+  .topbar-page-title {
+    display: block !important;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 17px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.18s;
+  }
+  .page.past-title .topbar-page-title {
+    opacity: 1;
+  }
+  .topbar-brand .logo {
+    font-size: 22px !important;
+  }
+  /* "Reconnecting…" hangs just under the bar. */
+  .topbar .pill-bad {
+    position: absolute;
+    top: calc(env(safe-area-inset-top) + var(--nav) + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    height: 28px;
+    padding: 0 12px;
+    font-size: 13px;
+    box-shadow: var(--shadow);
+  }
+
+  /* Content starts under the bar and scrolls beneath it. */
+  .thread-inner {
+    padding-top: calc(env(safe-area-inset-top) + var(--nav) + 10px);
+    padding-bottom: 18px;
+  }
+  .page-body {
+    padding-top: calc(env(safe-area-inset-top) + var(--nav));
+  }
+
+  /* ---- A new chat: greeting in the middle, ideas and the message box at the bottom ---- */
+  .welcome {
+    padding: calc(env(safe-area-inset-top) + var(--nav)) max(16px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  .keyboard .welcome {
+    padding-bottom: 8px;
+  }
+  .welcome-inner {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 0;
+  }
+  .welcome-head {
+    margin: auto 0;
+    padding: 28px 8px;
+  }
+  .welcome-title {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+  }
+  .welcome-sub {
+    margin: 6px 0 0;
+    color: var(--fg-3);
+    font-size: 17px;
+  }
+  .welcome-ideas {
+    order: 2;
+    display: flex;
+    gap: 10px;
+    margin: 0 -16px 12px;
+    padding: 2px 16px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding: 0 16px;
+    scrollbar-width: none;
+  }
+  .welcome-ideas::-webkit-scrollbar {
+    display: none;
+  }
+  .welcome-ideas .chips,
+  .welcome-ideas .idea-grid {
+    display: contents;
+  }
+  .welcome-inner > .composer-wrap {
+    order: 3;
+  }
+  .welcome-more {
+    display: none !important;
+  }
+  .keyboard .welcome-ideas {
+    display: none;
+  }
+  .welcome-ideas .chip,
+  .welcome-ideas .idea-card {
+    flex: none;
+    width: 228px;
+    height: auto;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 18px;
+    background: var(--grp);
+    scroll-snap-align: start;
+  }
+  .welcome-ideas .chip {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: 6px;
+    width: 160px;
+    color: var(--fg);
+    font-size: 15px;
+    font-weight: 600;
+    text-align: left;
+  }
+  .welcome-ideas .chip > svg {
+    width: 18px;
+    height: 18px;
+    color: var(--accent-text);
+  }
+  .idea-card:hover {
+    background: var(--grp);
+  }
+  .idea-title {
+    font-size: 15px;
+  }
+  .idea-prompt {
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  /* ---- The message box ---- */
+  .dock {
+    max-width: 100%;
+    padding: 6px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    background: var(--bg);
+  }
+  .dock::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -18px;
+    height: 18px;
+    background: linear-gradient(to bottom, transparent, var(--bg));
+    pointer-events: none;
+  }
+  .keyboard .dock {
+    padding-bottom: 8px;
+  }
+  .jump {
+    top: -52px;
+    width: 38px;
+    height: 38px;
+    border: 0.5px solid var(--sep);
+  }
+  .composer,
+  .composer:focus-within {
+    gap: 0;
+    padding: 4px 6px 6px 8px;
+    border: 0;
+    border-radius: 24px;
+    background: var(--grp);
+    box-shadow: none;
+  }
+  .composer textarea {
+    padding: 9px 8px 5px;
+    font-size: 17px;
+    line-height: 1.4;
+  }
+  .round-btn.primary {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .round-btn.primary:disabled {
+    opacity: 1;
+    background: var(--fill-2);
+    color: var(--fg-3);
+  }
+  .attachment {
+    border: 0;
+    background: var(--bg);
+  }
+  /* The project picker under a new chat: a quiet line instead of a tray. */
+  .composer-tray {
+    margin: 4px 6px 0;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+  .tray-btn {
+    height: 32px;
+    color: var(--fg-3);
+    font-size: 14px;
+  }
+
+  /* ---- Messages ---- */
+  .msg {
+    margin-bottom: 22px;
+  }
+  .bubble {
+    max-width: 84%;
+    padding: 8px 14px;
+    border-radius: 20px;
+    background: var(--grp);
+    font-size: 17px;
+    line-height: 1.4;
+  }
+  .bubble.editing textarea {
+    font-size: 17px;
+  }
+  .md {
+    font-size: 17px;
+    line-height: 1.55;
+  }
+  .msg-actions .icon-btn {
+    width: 34px;
+    height: 34px;
+    color: var(--fg-3);
+  }
+  .msg-stats {
+    font-size: 13px;
+  }
+  .thoughts-head {
+    height: 32px;
+    font-size: 15px;
+  }
+  .thoughts-body {
+    font-size: 15px;
+  }
+  .thinking {
+    font-size: 16px;
+  }
+  .msg-file {
+    border: 0;
+    background: var(--grp);
+  }
+  .approval {
+    border: 0.5px solid var(--sep);
+    border-radius: 20px;
+  }
+  .approval-buttons .btn {
+    flex: 1;
+    height: 44px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  /* ---- Pages: a large title that hands over to the bar as you scroll ---- */
+  .page-body {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .page-head {
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    margin: 4px 0 6px;
+  }
+  .page-head h1 {
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+  }
+  .page-actions {
+    flex-wrap: nowrap;
+    margin-bottom: 4px;
+  }
+  .page-actions .btn {
+    height: 34px;
+    padding: 0 14px;
+    border-radius: 17px;
+    background: var(--fill);
+    color: var(--accent-text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .page-actions .btn.primary {
+    background: var(--tint);
+    color: #fff;
+  }
+  .page-actions .btn.danger-text {
+    color: var(--danger);
+  }
+  .page-lead {
+    margin-bottom: 18px;
+    color: var(--fg-3);
+    font-size: 15px;
+  }
+  .section-head h2 {
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .list {
+    border: 0;
+    border-radius: 14px;
+    background: var(--grp);
+  }
+  .list-row {
+    position: relative;
+    min-height: 50px;
+    padding: 12px 16px;
+    border-bottom: 0;
+    background: transparent;
+    font-size: 16px;
+  }
+  .list-row + .list-row::before,
+  .cell + .cell::before,
+  .menu-item + .menu-item::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 16px;
+    right: 0;
+    height: 0.5px;
+    background: var(--sep);
+  }
+  .filters {
+    flex-wrap: nowrap;
+    margin: 0 -16px 14px;
+    padding: 0 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .filters::-webkit-scrollbar {
+    display: none;
+  }
+  .chip,
+  .chip:hover {
+    flex: none;
+    height: 34px;
+    border: 0;
+    background: var(--grp);
+    color: var(--fg);
+    font-size: 15px;
+  }
+  .chip.selected {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .idea-grid.big {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .idea-card {
+    border: 0;
+    border-radius: 18px;
+    background: var(--grp);
+  }
+  .fact-chip {
+    background: var(--grp);
+    font-size: 14px;
+  }
+  .routine-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .routine-card {
+    min-height: 0;
+    padding: 14px 16px;
+    border: 0;
+    border-radius: 18px;
+    background: var(--grp);
+  }
+  .routine-card.add {
+    min-height: 64px;
+    border: 1.5px dashed var(--border-strong);
+    background: none;
+  }
+  .routine-name {
+    font-size: 17px;
+  }
+  .routine-prompt {
+    font-size: 14px;
+  }
+  .add-row input,
+  .add-row .btn {
+    height: 46px;
+  }
+  .add-row input {
+    border: 0;
+    background: var(--grp);
+    font-size: 17px;
+  }
+
+  /* ---- Controls, iPhone style ---- */
+  .btn,
+  .btn:hover {
+    height: 40px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--fill);
+    color: var(--fg);
+    font-size: 15px;
+  }
+  .btn.primary,
+  .btn.primary:hover {
+    background: var(--tint);
+    color: #fff;
+    opacity: 1;
+  }
+  .btn.danger-text {
+    color: var(--danger);
+  }
+  .btn.small {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+  .btn.big {
+    height: 50px;
+    border-radius: 14px;
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .btn:disabled {
+    opacity: 0.4;
+  }
+  .toggle {
+    width: 51px;
+    height: 31px;
+    background: var(--fill-2);
+    transition: background 0.25s;
+  }
+  .toggle span {
+    top: 2px;
+    left: 2px;
+    width: 27px;
+    height: 27px;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15), 0 1px 1px rgba(0, 0, 0, 0.16);
+    transition: transform 0.25s var(--ease-ios);
+  }
+  .toggle.on {
+    background: var(--switch-on);
+  }
+  .toggle.on span {
+    transform: translateX(20px);
+  }
+  .segmented {
+    padding: 2px;
+    border-radius: 9px;
+    background: var(--fill);
+  }
+  .segmented button,
+  .segmented.sm button {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 7px;
+    font-size: 14px;
+  }
+  .notice {
+    border-radius: 12px;
+    font-size: 14px;
+  }
+  input[type="range"] {
+    width: 100%;
+  }
+
+  /* ---- Toasts: a capsule under the status bar ---- */
+  .toast {
+    padding: 11px 18px;
+    border: 0.5px solid var(--sep);
+    border-radius: 22px;
+    background: var(--cell);
+    color: var(--fg);
+    font-size: 15px;
+    font-weight: 500;
+    text-align: center;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.16);
+  }
+  .toast.error {
+    border: 0;
+    background: var(--danger);
+    color: #fff;
+  }
+
+  /* ---- Dialogs: a top bar with Back, the title, and a round close button ---- */
+  .modal-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-height: 52px;
+    padding: 8px 12px 6px 16px;
+  }
+  .modal-head h2 {
+    grid-column: 2;
+    max-width: 62vw;
+    overflow: hidden;
+    font-size: 17px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .modal-back {
+    grid-column: 1;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    height: 36px;
+    margin-left: -8px;
+    padding: 0 6px 0 0;
+    border: 0;
+    background: none;
+    color: var(--accent-text);
+    font-size: 17px;
+  }
+  .modal-close {
+    grid-column: 3;
+    justify-self: end;
+    width: 30px !important;
+    height: 30px !important;
+    border-radius: 50% !important;
+    background: var(--fill) !important;
+    color: var(--fg-3) !important;
+  }
+  .modal-close svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 2.6;
+  }
+  .modal-foot .grow {
+    display: none;
+  }
+  .modal-foot .btn {
+    flex: 1 1 0;
+    height: 50px;
+    border-radius: 14px;
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .field input,
+  .field textarea {
+    border: 0;
+    border-radius: 12px;
+    background: var(--grp);
+    font-size: 17px;
+  }
+
+  /* ---- Settings: grouped lists on gray, a list of sections first ---- */
+  .settings-sheet {
+    background: var(--grp);
+  }
+  .settings-sheet .modal-body {
+    padding: 0 0 max(28px, env(safe-area-inset-bottom));
+    overflow-x: hidden;
+  }
+  .settings-sheet .settings {
+    display: block;
+    height: auto;
+  }
+  .settings-sheet .settings-nav {
+    display: none;
+  }
+  .settings-sheet .settings-body {
+    overflow: visible;
+    padding: 6px 16px 0;
+  }
+  .settings-body > h3:first-child,
+  .settings-body > .h3-row > h3 {
+    display: none;
+  }
+  .settings-body > .h3-row {
+    justify-content: flex-end;
+    margin: 6px 0 4px;
+  }
+  .settings-sheet .settings-body > p,
+  .settings-sheet .settings-body p.muted {
+    margin: 10px 16px;
+    color: var(--fg-3);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .settings-sheet .setting {
+    position: relative;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    min-height: 50px;
+    padding: 11px 16px;
+    border-bottom: 0;
+    background: var(--cell);
+  }
+  .settings-sheet .setting + .setting::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 16px;
+    right: 0;
+    height: 0.5px;
+    background: var(--sep);
+  }
+  .settings-sheet .setting:first-child,
+  .settings-sheet :not(.setting) + .setting {
+    margin-top: 14px;
+    border-radius: 12px 12px 0 0;
+  }
+  .settings-sheet .setting:not(:has(+ .setting)) {
+    margin-bottom: 14px;
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+  }
+  .settings-sheet .setting-text {
+    flex: 1 1 150px;
+    min-width: 0;
+  }
+  .settings-sheet .setting-title {
+    font-size: 17px;
+    font-weight: 400;
+  }
+  .settings-sheet .setting-detail {
+    margin-top: 2px;
+    font-size: 13px;
+  }
+  .settings-sheet .setting-control {
+    flex: 0 1 auto;
+    max-width: 100%;
+    margin-left: auto;
+  }
+  /* Text boxes, pickers and sliders get the cell's full width under the label. */
+  .settings-sheet .setting:has(> .setting-control > :is(.input, .segmented, input[type="range"])) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .settings-sheet .setting:has(> .setting-control > :is(.input, .segmented, input[type="range"])) :is(.setting-text, .setting-control) {
+    flex: none;
+    margin-left: 0;
+  }
+  .settings-sheet .setting .input {
+    flex: 1;
+    width: 100% !important;
+    height: 40px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 10px;
+    background-color: var(--fill);
+    font-size: 17px;
+    box-shadow: none;
+  }
+  .settings-sheet .setting .btn {
+    height: 36px;
+  }
+  .settings-sheet .setting .segmented {
+    display: flex;
+    width: 100%;
+  }
+  .settings-sheet .setting .segmented button {
+    flex: 1;
+    justify-content: center;
+  }
+  .settings-sheet .mode-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 8px 0 14px;
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--cell);
+  }
+  .settings-sheet .mode-card {
+    display: block;
+    min-height: 62px;
+    padding: 12px 48px 12px 60px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .settings-sheet .mode-card + .mode-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 60px;
+    right: 0;
+    height: 0.5px;
+    background: var(--sep);
+  }
+  .settings-sheet .mode-icon {
+    position: absolute;
+    top: 14px;
+    left: 16px;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    background: var(--tint);
+    color: #fff;
+  }
+  .settings-sheet .mode-title,
+  .settings-sheet .mode-detail,
+  .settings-sheet .mode-need {
+    display: block;
+  }
+  .settings-sheet .mode-title {
+    font-size: 17px;
+    font-weight: 400;
+  }
+  .settings-sheet .mode-detail {
+    margin-top: 2px;
+    font-size: 13px;
+  }
+  .settings-sheet .mode-need {
+    margin-top: 4px;
+    color: var(--warn);
+    font-size: 13px;
+  }
+  .settings-sheet .mode-check {
+    top: 50%;
+    right: 16px;
+    width: 20px;
+    height: 20px;
+    transform: translateY(-50%);
+    color: var(--tint);
+  }
+  .settings-sheet .parts {
+    gap: 0;
+    margin: 8px 0 14px;
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--cell);
+  }
+  .settings-sheet .part {
+    position: relative;
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    padding: 12px 16px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .settings-sheet .part + .part::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 68px;
+    right: 0;
+    height: 0.5px;
+    background: var(--sep);
+  }
+  .settings-sheet .part-text {
+    flex: 1 1 170px;
+  }
+  .settings-sheet .part-title {
+    font-size: 16px;
+  }
+  .settings-sheet .part-actions {
+    margin-left: auto;
+  }
+  .settings-sheet .part-icon {
+    border-radius: 10px;
+  }
+  .settings-sheet .remote-pair {
+    border: 0;
+    border-radius: 12px;
+    background: var(--cell);
+  }
+
+  /* The first page of Settings. */
+  .settings-home {
+    padding: 4px 16px 0;
+  }
+  .settings-me {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    margin: 8px 0 24px;
+    padding: 12px 12px 12px 16px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--cell);
+    color: var(--fg);
+    text-align: left;
+  }
+  .avatar.big {
+    width: 58px;
+    height: 58px;
+    font-size: 25px;
+  }
+  .settings-me-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .settings-me-name {
+    overflow: hidden;
+    font-size: 21px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .settings-me-note {
+    color: var(--fg-3);
+    font-size: 14px;
+  }
+  .chev {
+    flex: none;
+    color: var(--fg-3);
+    opacity: 0.7;
+  }
+  .cell-group {
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--cell);
+  }
+  .cell {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 50px;
+    padding: 0 12px 0 16px;
+    border: 0;
+    background: none;
+    color: var(--fg);
+    font-size: 17px;
+    text-align: left;
+  }
+  .cell + .cell::before {
+    left: 60px;
+  }
+  .cell-icon {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    color: #fff;
+  }
+  .cell-icon svg {
+    width: 18px;
+    height: 18px;
+  }
+  .cell-label {
+    flex: 1;
+  }
+  .cell-value {
+    max-width: 45%;
+    overflow: hidden;
+    color: var(--fg-3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cell-foot {
+    margin: 16px;
+    color: var(--fg-3);
+    font-size: 13px;
+    text-align: center;
+  }
+  /* Going into a section slides it in from the right; Back slides the list in from the left. */
+  .slide-in {
+    animation: push-in 0.38s var(--ease-ios);
+  }
+  .slide-back {
+    animation: push-back 0.38s var(--ease-ios);
+  }
+}
+
+@keyframes push-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes push-back {
+  from {
+    transform: translateX(-30%);
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+/* Phones on their side: a slimmer bar, and room for the conversation. */
+@media (max-height: 500px) and (pointer: coarse) {
+  :root {
+    --nav: 44px;
+  }
+  .welcome-ideas,
+  .welcome-sub {
+    display: none;
+  }
+  .welcome-head {
+    padding: 12px 8px;
+  }
+}
+
+/* Phones: sheets and action sheets come up from the bottom. */
+@media (max-width: 600px) {
+  .modal-backdrop {
+    padding: calc(env(safe-area-inset-top) + 12px) 0 0;
+    background: rgba(0, 0, 0, 0.4);
+  }
+  .modal,
+  .modal.wide {
+    border-radius: 14px 14px 0 0;
+    transition: transform 0.32s var(--ease-ios);
+    animation: sheet-up 0.42s var(--ease-ios);
+  }
+  .modal::before {
+    content: "";
+    flex: none;
+    width: 36px;
+    height: 5px;
+    margin: 6px auto -4px;
+    border-radius: 3px;
+    background: var(--fill-2);
+  }
+  .modal-head {
+    touch-action: none;
+  }
+
+  .menu,
+  .menu.side-top,
+  .menu.side-bottom {
+    left: max(10px, env(safe-area-inset-left));
+    right: max(10px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    padding: 0;
+    border: 0;
+    border-radius: 14px;
+    background: var(--cell);
+    box-shadow: 0 10px 44px rgba(0, 0, 0, 0.28);
+    animation: sheet-up 0.36s var(--ease-ios);
+  }
+  .keyboard .menu {
+    bottom: calc(var(--vv-bottom, 0px) + 10px);
+  }
+  /* Menus with their own content, like the effort slider, keep their inside. */
+  .menu:not(:has(> .menu-item)) {
+    padding: 8px;
+  }
+  .menu-item {
+    position: relative;
+    min-height: 52px;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 0;
+    font-size: 17px;
+  }
+  .menu-item > svg {
+    order: 3;
+    width: 20px;
+    height: 20px;
+    color: var(--fg);
+  }
+  .menu-text {
+    order: 1;
+  }
+  .menu-hint {
+    order: 2;
+  }
+  .menu-detail {
+    font-size: 14px;
+  }
+  /* A check goes at the front, as on iPhone, with room kept for it on every row. */
+  .menu:has(.menu-check) .menu-item {
+    padding-left: 44px;
+  }
+  .menu-check {
+    position: absolute;
+    left: 16px;
+    color: var(--tint);
+  }
+  .menu-item + .menu-item::before {
+    left: 16px;
+  }
+  .menu-divider {
+    height: 8px;
+    margin: 0;
+    background: var(--fill);
+  }
+}
+
+/* Touch: no hover leftovers after a tap, a quick response when pressed, and no
+   text selection on buttons when a finger rests on them. */
+@media (hover: none) {
+  .icon-btn:not(.active):hover,
+  .round-btn.ghost:not(.active):hover,
+  .mode-btn:not(.active):hover,
+  .nav-row:not(.active):hover,
+  .chat-row:not(.active):hover,
+  .topbar-title.clickable:not(.active):hover,
+  .tray-btn:not(.active):hover,
+  .menu-item:hover,
+  .model-status:hover,
+  .profile:hover,
+  .thoughts-head:hover,
+  .folder-row:hover,
+  .list-row.clickable:hover,
+  .chat-row-more:not(.open):hover {
+    background: none;
+  }
+  .round-btn.primary:hover,
+  .btn.primary:hover {
+    opacity: 1;
+  }
+}
+@media (pointer: coarse) {
+  .icon-btn:active,
+  .round-btn.ghost:active,
+  .mode-btn:active,
+  .tray-btn:active,
+  .topbar-title.clickable:active {
+    background: var(--fill);
+  }
+  .nav-row:active,
+  .chat-row:active,
+  .list-row.clickable:active,
+  .idea-card:active,
+  .chip:active,
+  .menu-item:active,
+  .profile:active,
+  .model-status:active,
+  .folder-row:active,
+  .cell:active,
+  .settings-me:active,
+  .mode-card:active {
+    background: var(--fill);
+  }
+  .btn:active,
+  .round-btn.primary:active,
+  .link:active,
+  .modal-back:active {
+    opacity: 0.55;
+  }
+  button,
+  .topbar,
+  .nav,
+  .recents-label,
+  .msg-actions,
+  .composer-row,
+  .modal-head,
+  .welcome-ideas,
+  .chat-row {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+/* Phones: chats have a press-and-hold menu instead of a "…" button. */
+@media (pointer: coarse) and (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+  .chat-row-more {
+    position: absolute;
+    right: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0 !important;
+    pointer-events: none;
+  }
+  .chat-row .menu-anchor {
+    position: static;
+  }
+}
+
+/* ---- Phones: what Liquid Agent did, as two-line rows ----
+   One line for what it did, a quieter line under it for who allowed it and how
+   long it took. Side by side, the "Auto 150M approved" pill left room for only
+   "Ran `cd ~/…" and every row looked the same. */
+@media (max-width: 820px), (max-height: 500px) and (pointer: coarse) {
+  .steps-head {
+    min-height: 36px;
+    font-size: 15px;
+  }
+  .steps-list {
+    margin: 4px 0 8px 4px;
+    padding-left: 8px;
+  }
+  .step-row {
+    flex-wrap: wrap;
+    row-gap: 1px;
+    min-height: 44px;
+    padding: 7px 6px;
+    border-radius: 10px;
+    font-size: 15px;
+  }
+  .step-label {
+    flex: 1 1 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+  .step-chevron {
+    order: 1;
+    align-self: flex-start;
+    margin-top: 3px;
+  }
+  /* Starts the second line, under the label rather than under the icons. */
+  .step-row::before {
+    content: "";
+    order: 2;
+    flex: none;
+    width: 40px;
+  }
+  .step-row::after {
+    content: "";
+    order: 1;
+    flex-basis: 100%;
+    height: 0;
+  }
+  .step-row > .pill,
+  .step-wait,
+  .step-time {
+    order: 3;
+  }
+  .step-row > .pill {
+    height: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--fg-3);
+    font-size: 13px;
+    font-weight: 400;
+  }
+  .step-row > .pill-accent {
+    color: var(--accent-text);
+  }
+  .step-row > .pill-bad {
+    color: var(--danger);
+  }
+  .step-row > .pill + .step-time::before {
+    content: "·";
+    margin-right: 6px;
+  }
+  .step-wait,
+  .step-time {
+    font-size: 13px;
+  }
+  .step-detail {
+    margin: 2px 4px 8px 26px;
+  }
+  .step-note {
+    padding: 4px 6px;
+    font-size: 16px;
+  }
+}
+
+/* ---- Phones: a tapped suggestion presses in, and stays pressed while it starts ---- */
+@media (pointer: coarse) {
+  .welcome-ideas .chip,
+  .welcome-ideas .idea-card {
+    transition: transform 0.2s var(--ease-ios), background 0.2s, opacity 0.2s;
+  }
+  .welcome-ideas .chip:active,
+  .welcome-ideas .idea-card:active,
+  .welcome-ideas .starting {
+    transform: scale(0.96);
+    background: var(--fill-2);
+  }
+  .welcome-ideas button:disabled:not(.starting) {
+    opacity: 0.45;
+  }
+  .welcome-ideas .starting {
+    animation: starting 1s ease-in-out infinite alternate;
+  }
+}
+@keyframes starting {
+  to {
+    opacity: 0.55;
+  }
+}
+
+/* ---- Touch screens: the page itself stays put ----
+   No pinch or double-tap zoom, and no sliding the whole page around. The chat,
+   lists and sheets still scroll; phone.ts stops the drags that have nothing to scroll. */
+@media (pointer: coarse) {
+  html,
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: pan-x pan-y;
+  }
+  .thread,
+  .page-scroll,
+  .welcome,
+  .modal-body,
+  .recents,
+  .settings-body,
+  .menu {
+    overscroll-behavior: contain;
+  }
+}

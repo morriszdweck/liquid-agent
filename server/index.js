@@ -6,8 +6,8 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import { DATA, ROOT, bus, flushAll, settings, updateSettings } from "./core.js";
-import { openPath, reveal } from "./platform.js";
+import { DATA, DIRS, ROOT, bus, flushAll, settings, updateSettings } from "./core.js";
+import { openPath, pictureForModel, reveal, screenshot } from "./platform.js";
 import { backends } from "./backends.js";
 import { agent } from "./agent.js";
 import { memory } from "./memory.js";
@@ -18,6 +18,7 @@ import { MAX_UPLOAD, uploads } from "./uploads.js";
 import { speak, transcribe } from "./omni.js";
 import { handleVoice } from "./voice.js";
 import { BUILD, updater } from "./updater.js";
+import { info as remoteInfo, resetRemote, setRemote, startRemote } from "./remote.js";
 
 const PORT = Number(process.env.LIQUID_AGENT_PORT ?? 8170);
 const HOST = "127.0.0.1";
@@ -122,6 +123,7 @@ function snapshot() {
     reminders: reminderList(),
     dataDir: DATA,
     update: updater.snapshot,
+    remote: remoteInfo(),
   };
 }
 
@@ -192,6 +194,22 @@ route("POST", "/api/speak", async (req, _, res) => {
   return undefined;
 });
 
+// Remote control's "Look at my screen": a picture of this computer's screen, not the phone's.
+route("POST", "/api/screen", async (_req, _, res) => {
+  const file = path.join(DIRS.uploads, `screen-${crypto.randomUUID()}.png`);
+  const tmp = file.replace(/\.png$/, ".jpg");
+  try {
+    await screenshot(file);
+    const picture = await pictureForModel(file, tmp);
+    res.writeHead(200, { "Content-Type": picture.mime, "Content-Length": picture.data.length, "Cache-Control": "no-store" });
+    res.end(picture.data);
+    return undefined;
+  } finally {
+    fs.rmSync(file, { force: true });
+    fs.rmSync(tmp, { force: true });
+  }
+});
+
 route("GET", "/api/settings", () => settings);
 // Approve for Me needs Auto 150M. Choosing it early fetches Auto 150M and turns the mode on once it's ready.
 route("PATCH", "/api/settings", async (req) => {
@@ -245,6 +263,11 @@ route("POST", "/api/routines", async (req) => {
 route("PATCH", "/api/routines/([\\w-]+)", async (req, [id]) => routineStore.update(id, await json(req)) ?? notFound());
 route("DELETE", "/api/routines/([\\w-]+)", (_, [id]) => routineStore.remove(id));
 route("POST", "/api/routines/([\\w-]+)/run", (_, [id]) => routineStore.run(id) ?? notFound());
+
+// Remote control from liquid-rc.mincoffical.codes. A paired browser can't change these (remote.js blocks them).
+route("GET", "/api/remote", () => remoteInfo());
+route("POST", "/api/remote", async (req) => setRemote((await json(req))?.enabled));
+route("POST", "/api/remote/reset", () => resetRemote());
 
 route("DELETE", "/api/reminders/([\\w-]+)", (_, [id]) => cancelReminder(id));
 route("DELETE", "/api/activity", () => agent.clearActivity());
@@ -417,6 +440,7 @@ server.listen(PORT, HOST, () => {
     .finally(() => backends.resume());
   memory.tidy();
   updater.start(shutdown);
+  startRemote(PORT, TOKEN);
 });
 
 let stopping = false;

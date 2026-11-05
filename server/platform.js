@@ -189,7 +189,12 @@ export async function writeClipboard(text) {
 
 /** Saves a PNG of the whole screen to `file`. */
 export async function screenshot(file) {
-  if (IS_MAC) return run("screencapture", ["-x", "-C", "-t", "png", file]);
+  if (IS_MAC)
+    return run("screencapture", ["-x", "-C", "-t", "png", file]).catch((e) => {
+      // macOS gives this when the app hasn't been allowed to record the screen.
+      if (/could not create image/i.test(String(e?.message))) throw new Error("Liquid Agent isn't allowed to see the screen yet. Turn it on in System Settings → Privacy & Security → Screen Recording, then try again.");
+      throw e;
+    });
   noDesktop();
   const de = desktopName();
   const tries = [];

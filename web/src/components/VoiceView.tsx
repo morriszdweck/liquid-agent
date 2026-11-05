@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Keyboard, Mic, MicOff, PhoneOff, Send, Video, VideoOff, Wrench } from "lucide-react";
-import { socketURL } from "../api";
+import { openSocket } from "../api";
 import { Camera, Mic as Microphone, SpeechDetector } from "../audio/capture";
 import { Player } from "../audio/player";
 import { stopSpeaking } from "../audio/speak";
@@ -101,7 +101,7 @@ export function VoiceView({ chatId }: { chatId?: string }) {
     setAgentText("");
     setTool(null);
     setPhase("connecting");
-    const ws = new WebSocket(socketURL("/voice"));
+    const ws = openSocket("/voice");
     ws.binaryType = "arraybuffer";
     const s: Session = { ws, lastFrame: 0, level: 0 };
     session.current = s;

@@ -19,6 +19,7 @@ import {
 import { api } from "../api";
 import { errorToast, go, part, useStore } from "../store";
 import type { Chat } from "../types";
+import { isPhone } from "../phone";
 import { IS_MAC, chatMarkdown, cx, download, groupChats } from "../util";
 import { IconButton, Menu, Spinner, StatusDot } from "./ui";
 
@@ -116,7 +117,7 @@ export function Sidebar() {
             {status.tone === "bad" ? <Download size={15} /> : <StatusDot tone={status.tone} />}
             <span>{status.text}</span>
           </button>
-          <button className="profile" onClick={() => useStore.setState({ settingsOpen: "general" })}>
+          <button className="profile" onClick={() => useStore.setState({ settingsOpen: isPhone() ? "home" : "general" })}>
             <span className="avatar">{(settings?.userName || "You").slice(0, 1).toUpperCase()}</span>
             <span className="profile-name">{settings?.userName || "Settings"}</span>
             <SettingsIcon size={16} />
@@ -169,7 +170,8 @@ function ChatRow({
   }
 
   return (
-    <div className={cx("chat-row", active && "active")}>
+    // Phones: press and hold a chat for its menu.
+    <div className={cx("chat-row", active && "active")} data-hold=".chat-row-more">
       <button className="chat-row-main" onClick={() => go(`#/chat/${chat.id}`)} title={chat.title}>
         {chat.source === "voice" && <AudioLines size={13} className="chat-row-icon" />}
         {chat.source === "routine" && <Repeat size={13} className="chat-row-icon" />}

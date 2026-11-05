@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown, Menu as MenuIcon, SquarePen, WifiOff } from "lucide-react";
 import { go, useStore } from "../store";
 import { cx } from "../util";
+import { Logo } from "./Sidebar";
 import { IconButton, Menu, type MenuItem } from "./ui";
 
 export function TopBar({
@@ -12,12 +13,18 @@ export function TopBar({
   onRename,
   center,
   right,
+  pageTitle,
+  brand,
 }: {
   title?: string;
   menu?: MenuItem[];
   onRename?: (title: string) => void;
   center?: ReactNode;
   right?: ReactNode;
+  /** Phones: the page's name, shown small in the bar once its big title scrolls away. */
+  pageTitle?: string;
+  /** Phones: the Liquid Agent logo in the middle of the bar. */
+  brand?: boolean;
 }) {
   const connected = useStore((s) => s.connected);
   const loaded = useStore((s) => s.loaded);
@@ -34,7 +41,7 @@ export function TopBar({
     <header className="topbar">
       <div className="topbar-left">
         <IconButton label="Open sidebar" className="mobile-only" onClick={() => useStore.setState({ sidebarOpen: true })}>
-          <MenuIcon size={18} />
+          <MenuIcon size={20} />
         </IconButton>
         {editing ? (
           <input
@@ -65,7 +72,15 @@ export function TopBar({
           title && <div className="topbar-title">{title}</div>
         )}
       </div>
-      <div className="topbar-center">{center}</div>
+      <div className="topbar-center">
+        {center}
+        {pageTitle && <div className="topbar-page-title phone-only">{pageTitle}</div>}
+        {brand && (
+          <div className="topbar-brand phone-only">
+            <Logo size={21} />
+          </div>
+        )}
+      </div>
       <div className="topbar-right">
         {loaded && !connected && (
           <span className="pill pill-bad">
@@ -74,7 +89,7 @@ export function TopBar({
         )}
         {right}
         <IconButton label="New chat" className="mobile-only" onClick={() => go("#/")}>
-          <SquarePen size={18} />
+          <SquarePen size={20} />
         </IconButton>
       </div>
     </header>
@@ -98,7 +113,7 @@ export function Toasts() {
 export function Page({ title, right, children, wide }: { title: string; right?: ReactNode; children: ReactNode; wide?: boolean }) {
   return (
     <div className="page">
-      <TopBar />
+      <TopBar pageTitle={title} />
       <div className="page-scroll">
         <div className={cx("page-body", wide && "wide")}>
           <div className="page-head">

@@ -2201,6 +2201,8 @@ input[type="range"] {
 .md td {
   padding: 9px 14px;
   border-bottom: 1px solid var(--border);
+  /* Words stay whole; a column grows to its longest word instead. */
+  overflow-wrap: break-word;
   text-align: left;
   vertical-align: top;
 }
@@ -3066,7 +3068,8 @@ input[type="range"] {
 
 /* ---------- Phones and narrow windows ---------- */
 
-@media (max-width: 820px) {
+/* Phones on their side count too: a sidebar would take a third of the screen. */
+@media (max-width: 820px), (max-height: 500px) and (pointer: coarse) {
   .app {
     padding: 0;
   }
@@ -3176,5 +3179,337 @@ input[type="range"] {
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+   transition: left 0.18s ease;
+ }
+
+/* ---- Remote control (Settings → Remote) ---- */
+.remote-pair {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.remote-qr {
+  width: 164px;
+  height: 164px;
+  flex: none;
+  border-radius: 10px;
+}
+.remote-pair-copy h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+.remote-pair-copy p {
+  margin: 0 0 12px;
+}
+.remote-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+@media (max-width: 560px) {
+  .remote-pair {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* ---------- Touch screens, phones and the Home Screen app ---------- */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  overscroll-behavior: none;
+}
+.menu-scrim {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  /* Sized by main.tsx to what the keyboard leaves free. */
+  .app,
+  .splash {
+    position: fixed;
+    top: var(--app-top, 0px);
+    left: 0;
+    right: 0;
+    height: var(--app-h, 100dvh);
+  }
+  .modal-backdrop {
+    top: var(--app-top, 0px);
+    bottom: auto;
+    height: var(--app-h, 100dvh);
+  }
+  /* 16px text keeps iPhone from zooming into a box when it's tapped. */
+  :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    font-size: 16px;
+  }
+  button,
+  a,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+  .round-btn {
+    width: 40px;
+    height: 40px;
+  }
+  .mode-btn {
+    height: 40px;
+    border-radius: 20px;
+  }
+  .composer textarea {
+    max-height: min(220px, calc(var(--app-h, 100dvh) * 0.3));
+  }
+}
+
+@media (max-width: 820px), (max-height: 500px) and (pointer: coarse) {
+  .app {
+    padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    background: var(--bg);
+  }
+  .topbar {
+    height: calc(52px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+    gap: 4px;
+  }
+  .topbar-center:empty {
+    display: none;
+  }
+  .topbar:has(.topbar-center:empty) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .sidebar {
+    width: min(300px, 86vw);
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    overscroll-behavior: contain;
+  }
+  .dock {
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  .keyboard .dock {
+    padding-bottom: 8px;
+  }
+  .welcome {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .welcome-inner {
+    padding-bottom: 0;
+  }
+  .page-body {
+    padding-bottom: calc(40px + env(safe-area-inset-bottom));
+  }
+  .page-head {
+    flex-wrap: wrap;
+  }
+  .page-head h1 {
+    font-size: 23px;
+  }
+  .page-actions {
+    flex-wrap: wrap;
+  }
+  .setting-control {
+    flex-wrap: wrap;
+  }
+  .settings-nav {
+    scrollbar-width: none;
+  }
+  /* Toasts at the top, clear of the message box and the keyboard. */
+  .toasts {
+    top: calc(var(--app-top, 0px) + env(safe-area-inset-top) + 10px);
+    bottom: auto;
+    width: calc(100% - 24px);
+  }
+  .toast {
+    animation-name: drop;
+  }
+  .floating-approval {
+    left: 10px;
+    right: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    width: auto;
+  }
+  .thread-inner {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+}
+
+@keyframes drop {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+}
+@keyframes sheet {
+  from {
+    transform: translateY(40px);
+  }
+}
+
+/* Phones: dialogs and menus slide up from the bottom. */
+@media (max-width: 600px) {
+  .modal-backdrop {
+    place-items: end stretch;
+    padding: calc(env(safe-area-inset-top) + 28px) 0 0;
+  }
+  .modal,
+  .modal.wide {
+    width: 100%;
+    max-height: 100%;
+    border: 0;
+    border-radius: 20px 20px 0 0;
+    animation: sheet 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .modal.wide {
+    height: 100%;
+  }
+  .modal-head {
+    padding: 14px 12px 6px 18px;
+  }
+  .modal-body {
+    padding: 6px 16px max(18px, env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
+  }
+  .modal-foot {
+    flex-wrap: wrap;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  }
+  .keyboard .modal-body,
+  .keyboard .modal-foot {
+    padding-bottom: 12px;
+  }
+
+  .menu-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: rgba(0, 0, 0, 0.3);
+    animation: fade 0.15s;
+  }
+  .menu,
+  .menu.side-top,
+  .menu.side-bottom {
+    position: fixed;
+    top: auto;
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    width: auto !important;
+    min-width: 0;
+    max-height: calc(var(--app-h, 100dvh) - env(safe-area-inset-top) - 40px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px;
+    border-radius: 18px;
+    animation: sheet 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  /* With the keyboard up, sit right above it. */
+  .keyboard .menu {
+    bottom: calc(var(--vv-bottom, 0px) + 8px);
+  }
+  .menu-item {
+    min-height: 46px;
+    padding: 10px 12px;
+    font-size: 15px;
+  }
+
+  /* Tables scroll sideways instead of squeezing every column. */
+  .md th,
+  .md td {
+    min-width: 10.5em;
+  }
+  .md td:first-child,
+  .md th:first-child {
+    min-width: 6em;
+  }
+
+  /* Activity: the label gets its own line, the verdict and time go under it. */
+  .activity-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    row-gap: 6px;
+    column-gap: 10px;
+  }
+  .activity-row > svg {
+    margin-top: 2px;
+  }
+  .activity-row .list-main {
+    flex: 1 1 calc(100% - 30px);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+  }
+  .activity-row .pill {
+    margin-left: 25px;
+  }
+  .activity-row .pill + .muted {
+    margin-left: 0;
+  }
+  .activity-row > .muted:last-child {
+    margin-left: auto;
+  }
+}
+
+/* Small phones: the permissions button shows just its icon. */
+@media (max-width: 440px) {
+  .perm-btn {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+  .perm-btn > span {
+    display: none;
+  }
+  .composer {
+    padding-left: 8px;
+  }
+  .welcome-title {
+    font-size: 23px;
+  }
+}
+
+/* Phones on their side: less chrome, more room for the conversation. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .topbar {
+    height: calc(44px + env(safe-area-inset-top));
+  }
+  .welcome {
+    padding-top: 8px;
+  }
+  .welcome-title {
+    font-size: 21px;
+  }
+  .thread-inner {
+    padding-top: 8px;
+  }
+  .dock {
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+  }
+  .modal-backdrop {
+    padding-top: 8px;
+  }
+}
+
+/* Tablets in the desktop layout: keep the edges clear of rounded corners. */
+@media (min-width: 821px) and (pointer: coarse) {
+  .app {
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) env(safe-area-inset-left);
   }
 }

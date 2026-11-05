@@ -1,11 +1,14 @@
 // Settings, the one-click downloads, and the first-run setup screen.
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import qrcode from "qrcode-generator";
 import {
   AudioLines,
   Bell,
   Brain,
   Check,
+  ChevronRight,
+  Copy,
   Cpu,
   Download,
   Eye,
@@ -18,16 +21,18 @@ import {
   RotateCcw,
   Shield,
   SlidersHorizontal,
+  Smartphone,
   Square,
   Sun,
   Trash2,
   User,
   Volume2,
 } from "lucide-react";
-import { api } from "../api";
+import { api, install, installable, isRemote } from "../api";
 import { speak, stopSpeaking } from "../audio/speak";
 import { errorToast, toast, useStore } from "../store";
 import type { ModelResolution, Part, Settings as SettingsType } from "../types";
+import { usePhone } from "../phone";
 import { DEVICE, IS_MAC, cx, timeAgo } from "../util";
 import { MODES, modeNote } from "./Composer";
 import { Logo } from "./Sidebar";
@@ -44,39 +49,102 @@ const PART_ICONS: Record<Part["id"], JSX.Element> = {
 };
 
 const TABS = [
-  { id: "general", label: "General", icon: <User size={15} /> },
-  { id: "voice", label: "Voice", icon: <AudioLines size={15} /> },
-  { id: "safety", label: "Safety", icon: <Shield size={15} /> },
-  { id: "downloads", label: "Downloads", icon: <Download size={15} /> },
-  { id: "advanced", label: "Advanced", icon: <SlidersHorizontal size={15} /> },
+  { id: "general", label: "General", icon: <User size={15} />, color: "#8e8e93", note: "Name, personality, appearance" },
+  { id: "voice", label: "Voice", icon: <AudioLines size={15} />, color: "#ff375f", note: "How Liquid Agent sounds" },
+  { id: "safety", label: "Safety", icon: <Shield size={15} />, color: "#34c759", note: "What Liquid Agent may do without asking" },
+  { id: "downloads", label: "Downloads", icon: <Download size={15} />, color: "#0a84ff", note: "Models and helpers" },
+  { id: "remote", label: "Remote", icon: <Smartphone size={15} />, color: "#ff9f0a", note: "Use Liquid Agent from your phone" },
+  { id: "advanced", label: "Advanced", icon: <SlidersHorizontal size={15} />, color: "#5e5ce6", note: "Memory, steps, creativity" },
 ];
 
+/**
+ * Settings. On a computer, tabs down the side. On a phone it works like the
+ * iPhone's Settings app: a list ("home") that opens each section as its own page.
+ */
 export function SettingsModal() {
   const tab = useStore((s) => s.settingsOpen);
   const settings = useStore((s) => s.settings);
+  const phone = usePhone();
+  const nav = useRef<HTMLElement>(null);
+  const last = useRef(tab);
+  // Pages slide in from the right going in, and from the left coming back.
+  const direction = tab === "home" ? "back" : last.current === "home" ? "in" : "";
+  useEffect(() => {
+    last.current = tab;
+  }, [tab]);
   if (!tab || !settings) return null;
   const close = () => useStore.setState({ settingsOpen: null });
+  const open = (id: string) => useStore.setState({ settingsOpen: id });
+  const current = tab === "home" && !phone ? "general" : tab;
+  const section = TABS.find((t) => t.id === current);
 
   return (
-    <Modal title="Settings" onClose={close} wide>
-      <div className="settings">
-        <nav className="settings-nav">
-          {TABS.map((t) => (
-            <button key={t.id} className={cx("nav-row", tab === t.id && "active")} onClick={() => useStore.setState({ settingsOpen: t.id })}>
-              {t.icon}
-              <span>{t.label}</span>
-            </button>
-          ))}
-        </nav>
-        <div className="settings-body">
-          {tab === "general" && <General settings={settings} />}
-          {tab === "voice" && <Voice settings={settings} />}
-          {tab === "safety" && <Safety settings={settings} />}
-          {tab === "downloads" && <Downloads />}
-          {tab === "advanced" && <Advanced settings={settings} />}
+    <Modal
+      title={phone ? (section?.label ?? "Settings") : "Settings"}
+      onClose={close}
+      wide
+      className="settings-sheet"
+      back={phone && section ? { label: "Settings", onClick: () => open("home") } : undefined}
+    >
+      {phone && current === "home" ? (
+        <SettingsHome key="home" settings={settings} open={open} direction={direction} />
+      ) : (
+        <div className={cx("settings", direction && `slide-${direction}`)} key={phone ? current : "settings"}>
+          <nav className="settings-nav" ref={nav}>
+            {TABS.map((t) => (
+              <button key={t.id} className={cx("nav-row", current === t.id && "active")} onClick={() => open(t.id)}>
+                {t.icon}
+                <span>{t.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="settings-body">
+            {current === "general" && <General settings={settings} />}
+            {current === "voice" && <Voice settings={settings} />}
+            {current === "safety" && <Safety settings={settings} />}
+            {current === "downloads" && <Downloads />}
+            {current === "remote" && <RemoteControl />}
+            {current === "advanced" && <Advanced settings={settings} />}
+          </div>
         </div>
-      </div>
+      )}
     </Modal>
+  );
+}
+
+/** Phones: the first page of Settings, a list like the iPhone's. */
+function SettingsHome({ settings, open, direction }: { settings: SettingsType; open: (id: string) => void; direction: string }) {
+  const update = useStore((s) => s.update);
+  const remote = useStore((s) => s.remote);
+  const name = settings.userName || "You";
+  const value: Record<string, string> = {
+    safety: MODES.find((m) => m.value === settings.approvalMode)?.label ?? "",
+    remote: isRemote ? "Connected" : remote?.enabled ? "On" : "Off",
+  };
+  return (
+    <div className={cx("settings-home", direction && `slide-${direction}`)}>
+      <button className="settings-me" onClick={() => open("general")}>
+        <span className="avatar big">{name.slice(0, 1).toUpperCase()}</span>
+        <span className="settings-me-text">
+          <span className="settings-me-name">{name}</span>
+          <span className="settings-me-note">Liquid Agent on your {DEVICE}</span>
+        </span>
+        <ChevronRight size={18} className="chev" />
+      </button>
+      <div className="cell-group">
+        {TABS.map((t) => (
+          <button key={t.id} className="cell link-cell" onClick={() => open(t.id)}>
+            <span className="cell-icon" style={{ background: t.color }}>
+              {t.icon}
+            </span>
+            <span className="cell-label">{t.label}</span>
+            {value[t.id] && <span className="cell-value">{value[t.id]}</span>}
+            <ChevronRight size={18} className="chev" />
+          </button>
+        ))}
+      </div>
+      {update && <p className="cell-foot">{update.build ? `Liquid Agent ${update.version}, build ${update.build}` : `Liquid Agent ${update.version}`}</p>}
+    </div>
   );
 }
 
@@ -484,9 +552,117 @@ function Downloads() {
           <PartRow key={p.id} part={p} />
         ))}
       </div>
-      <button className="btn" onClick={() => api("POST", "/api/reveal").catch(errorToast)}>
-        <FolderOpen size={14} /> {IS_MAC ? "Show files in Finder" : "Show files"}
-      </button>
+      {!isRemote && (
+        <button className="btn" onClick={() => api("POST", "/api/reveal").catch(errorToast)}>
+          <FolderOpen size={14} /> {IS_MAC ? "Show files in Finder" : "Show files"}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** A QR code of the pairing link, drawn as one SVG path. */
+function QR({ text }: { text: string }) {
+  const d = useMemo(() => {
+    const qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+    const n = qr.getModuleCount();
+    let path = "";
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) path += `M${c + 2} ${r + 2}h1v1h-1z`;
+    return { path, size: n + 4 };
+  }, [text]);
+  return (
+    <svg className="remote-qr" viewBox={`0 0 ${d.size} ${d.size}`} shapeRendering="crispEdges" role="img" aria-label="QR code of the remote control link">
+      <rect width={d.size} height={d.size} fill="#fff" />
+      <path d={d.path} fill="#000" />
+    </svg>
+  );
+}
+
+/** Remotely: put Liquid Agent on the Home Screen (iPhone, iPad) or install it (Chrome, Edge, Android). */
+function InstallApp() {
+  const [how, setHow] = useState(installable);
+  if (how === "standalone")
+    return (
+      <Row title="Liquid Agent app" detail="Installed. Liquid Agent opens full screen from your Home Screen or app list.">
+        <Check size={16} />
+      </Row>
+    );
+  const go = () =>
+    install().then((r) => {
+      if (r === "accepted") toast("Liquid Agent is installed.");
+      setHow(installable());
+    }, errorToast);
+  const detail =
+    how === "ios"
+      ? "Add Liquid Agent to your Home Screen to open it full screen, like an app."
+      : how === "prompt"
+        ? "Install Liquid Agent to open it in its own window, like an app."
+        : "To use Liquid Agent like an app, choose Install app or Add to Home Screen in your browser's menu.";
+  return (
+    <Row title="Liquid Agent app" detail={detail}>
+      {how && (
+        <button className="btn primary" onClick={go}>
+          <Smartphone size={14} /> {how === "ios" ? "Add to Home Screen" : "Install"}
+        </button>
+      )}
+    </Row>
+  );
+}
+
+/** Remote control from liquid-rc.mincoffical.codes: the switch, the pairing link and its QR code. */
+function RemoteControl() {
+  const remote = useStore((s) => s.remote);
+  if (isRemote)
+    return (
+      <>
+        <h3>Remote</h3>
+        <InstallApp />
+        <p className="muted">You're controlling Liquid Agent remotely. Everything is end-to-end encrypted between this device and your {DEVICE}.</p>
+        <p className="muted">To turn remote control off or make a new link, use Settings → Remote on the {DEVICE} itself.</p>
+      </>
+    );
+  if (!remote) return null;
+  const set = (enabled: boolean) => api("POST", "/api/remote", { enabled }).catch(errorToast);
+  const status = { off: "Off.", connecting: "Connecting to the relay…", online: remote.devices ? `On. ${remote.devices} device${remote.devices === 1 ? "" : "s"} connected.` : "On. Waiting for a device." }[remote.status];
+  return (
+    <>
+      <h3>Remote</h3>
+      <Row title="Remote control" detail={`Use Liquid Agent from your phone or any browser at liquid-rc.mincoffical.codes, while this ${DEVICE} is on and Liquid Agent is open.`}>
+        <Toggle checked={remote.enabled} onChange={set} />
+      </Row>
+      {remote.enabled && (
+        <>
+          <Row title="Status" detail={status}>
+            <StatusDot tone={remote.status === "online" ? "ok" : "busy"} />
+          </Row>
+          <div className="remote-pair">
+            <QR text={remote.link} />
+            <div className="remote-pair-copy">
+              <h4>Pair a device</h4>
+              <p className="muted">Scan the code with your phone's camera, or open the link in any browser. Anyone with the link can use Liquid Agent, so keep it to yourself.</p>
+              <div className="remote-actions">
+                <button
+                  className="btn primary"
+                  onClick={() => navigator.clipboard.writeText(remote.link).then(() => toast("Link copied."), errorToast)}
+                >
+                  <Copy size={14} /> Copy link
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    if (confirm("Make a new link? Devices paired with the old one stop working.")) api("POST", "/api/remote/reset").catch(errorToast);
+                  }}
+                >
+                  <RotateCcw size={14} /> New link
+                </button>
+              </div>
+            </div>
+          </div>
+          <p className="muted small">The link holds an encryption key that never reaches the relay, so the relay only passes along scrambled data.</p>
+        </>
+      )}
     </>
   );
 }

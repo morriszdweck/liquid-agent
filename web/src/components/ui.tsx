@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { ChevronLeft, X } from "lucide-react";
+import { isPhone } from "../phone";
 import { cx } from "../util";
 
 export function Spinner({ size = 14 }: { size?: number }) {
@@ -82,12 +83,12 @@ export function Menu({
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const onDown = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDown);
+    document.addEventListener("pointerdown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
@@ -95,6 +96,8 @@ export function Menu({
   return (
     <div className="menu-anchor" ref={ref}>
       {trigger(open, () => setOpen(!open))}
+      {/* On phones menus open as a sheet at the bottom; the scrim catches the tap that closes it. */}
+      {open && <div className="menu-scrim" onClick={close} aria-hidden="true" />}
       {open && (
         <div className={cx("menu", `align-${align}`, `side-${side}`)} style={width ? { width } : undefined} role="menu">
           {typeof items === "function"
@@ -129,18 +132,76 @@ export function Menu({
   );
 }
 
-export function Modal({ title, onClose, children, wide, footer }: { title: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean; footer?: ReactNode }) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide,
+  footer,
+  back,
+  className,
+}: {
+  title: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+  wide?: boolean;
+  footer?: ReactNode;
+  /** A back button at the left of the title, for dialogs with pages. */
+  back?: { label: string; onClick: () => void };
+  className?: string;
+}) {
+  const downOnBackdrop = useRef(false);
+  const sheet = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ y: number; t: number } | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Phones: pull the sheet down by its top to put it away.
+  const pull = {
+    onTouchStart: (e: React.TouchEvent) => {
+      if (!isPhone() || (e.target as Element).closest("button, input, select, textarea")) return;
+      drag.current = { y: e.touches[0].clientY, t: e.timeStamp };
+      if (sheet.current) sheet.current.style.transition = "none";
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      if (!drag.current || !sheet.current) return;
+      const dy = Math.max(0, e.touches[0].clientY - drag.current.y);
+      sheet.current.style.transform = dy ? `translateY(${dy}px)` : "";
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      const start = drag.current;
+      drag.current = null;
+      const el = sheet.current;
+      if (!start || !el) return;
+      const dy = Math.max(0, e.changedTouches[0].clientY - start.y);
+      const speed = dy / Math.max(1, e.timeStamp - start.t);
+      el.style.transition = "";
+      if (dy > 110 || (dy > 24 && speed > 0.6)) {
+        el.style.transform = "translateY(100%)";
+        setTimeout(onClose, 200);
+      } else el.style.transform = "";
+    },
+  };
+
   return createPortal(
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={cx("modal", wide && "wide")} role="dialog" aria-modal="true">
-        <div className="modal-head">
+    <div
+      className="modal-backdrop"
+      onPointerDown={(e) => (downOnBackdrop.current = e.target === e.currentTarget)}
+      onClick={(e) => downOnBackdrop.current && e.target === e.currentTarget && onClose()}
+    >
+      <div ref={sheet} className={cx("modal", wide && "wide", className)} role="dialog" aria-modal="true">
+        <div className={cx("modal-head", back && "has-back")} {...pull}>
+          {back && (
+            <button type="button" className="modal-back" onClick={back.onClick}>
+              <ChevronLeft size={22} />
+              <span>{back.label}</span>
+            </button>
+          )}
           <h2>{title}</h2>
-          <IconButton label="Close" onClick={onClose}>
+          <IconButton label="Close" className="modal-close" onClick={onClose}>
             <X size={18} />
           </IconButton>
         </div>

@@ -1,0 +1,21 @@
+{
+  "name": "Liquid Agent",
+  "short_name": "Liquid Agent",
+  "description": "Remote control for Liquid Agent, the private AI agent.",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -18,10 +18,11 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { api, fileURL, transcribe, upload } from "../api";
+import { api, computerScreen, isRemote, transcribe, upload, useFileURL } from "../api";
 import { Mic as Microphone, wav } from "../audio/capture";
-import { errorToast, go, part, toast, useStore } from "../store";
+import { errorToast, go, noteChat, part, toast, useStore } from "../store";
 import type { ApprovalMode, Attachment, Chat, Part } from "../types";
+import { touchFirst } from "../phone";
 import { DEVICE, captureScreen, cx, prepareImage } from "../util";
 import { ProjectPicker } from "./ProjectPicker";
 import { Menu, Spinner } from "./ui";
@@ -120,7 +121,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   }, []);
 
   useEffect(() => {
-    if (autoFocus) area.current?.focus();
+    if (autoFocus && !touchFirst()) area.current?.focus();
   }, [autoFocus, chat?.id]);
 
   const addFiles = useCallback(async (list: File[] | Blob[], names?: string[]) => {
@@ -193,6 +194,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
         const project = useStore.getState().draftProject;
         const created = await api<Chat>("POST", "/api/chats", { ...body, project: project ?? undefined });
         useStore.setState({ draftProject: null });
+        noteChat(created);
         go(`#/chat/${created.id}`);
       }
       keepDraft("");
@@ -205,7 +207,8 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
   async function lookAtScreen() {
     if (!omniUp) return toast("Seeing your screen needs Eyes and ears. Set it up in Settings → Downloads.", "error");
     try {
-      const shot = await captureScreen();
+      // Remotely, "my screen" is the computer's, not the phone's.
+      const shot = isRemote ? await computerScreen() : await captureScreen();
       await addFiles([shot], [`Screen ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.jpg`]);
       if (!text.trim()) setText("What's on my screen?");
       area.current?.focus();
@@ -274,7 +277,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
             {files.map((f) => (
               <div key={f.key} className={cx("attachment", f.kind === "image" && "image")}>
                 {f.kind === "image" ? (
-                  <img src={f.preview ?? (f.uploaded ? fileURL(f.uploaded.id) : undefined)} alt={f.name} />
+                  <Thumb src={f.preview} id={f.uploaded?.id} alt={f.name} />
                 ) : (
                   <>
                     <span className="attachment-icon">{f.kind === "audio" ? <Music size={16} /> : <FileText size={16} />}</span>
@@ -371,7 +374,7 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
               width={300}
               trigger={(open, toggle) => (
                 <button
-                  className={cx("mode-btn", open && "active")}
+                  className={cx("mode-btn", "perm-btn", open && "active")}
                   onClick={toggle}
                   aria-label={`Permissions: ${mode.label}`}
                   title={guardianWanted ? "Approve for Me turns on once Auto 150M is ready" : "Permissions"}
@@ -414,4 +417,10 @@ export function Composer({ chat, autoFocus }: { chat?: Chat; autoFocus?: boolean
       {!chat && <ProjectPicker />}
     </div>
   );
+}
+
+/** A picked picture: its local preview, or the uploaded copy (fetched through the relay remotely). */
+function Thumb({ src, id, alt }: { src?: string; id?: string; alt: string }) {
+  const uploaded = useFileURL(src ? undefined : id);
+  return <img src={src ?? uploaded} alt={alt} />;
 }

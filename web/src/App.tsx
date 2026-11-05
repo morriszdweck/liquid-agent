@@ -8,16 +8,38 @@ import { Toasts } from "./components/Shell";
 import { Logo, Sidebar } from "./components/Sidebar";
 import { Spinner } from "./components/ui";
 import { VoiceView } from "./components/VoiceView";
+import { PHONE } from "./phone";
 import { connect, go, useStore } from "./store";
 
 function useTheme() {
   const theme = useStore((s) => s.settings?.theme ?? "system");
   useEffect(() => {
     const dark = matchMedia("(prefers-color-scheme: dark)");
-    const apply = () => (document.documentElement.dataset.theme = theme === "system" ? (dark.matches ? "dark" : "light") : theme);
+    // Same test as the phone layout in styles.css, where the top bar sits on --bg.
+    const phone = matchMedia(PHONE);
+    const apply = () => {
+      document.documentElement.dataset.theme = theme === "system" ? (dark.matches ? "dark" : "light") : theme;
+      // The phone's status bar and browser bars take the color of the top bar.
+      const color = getComputedStyle(document.documentElement).getPropertyValue(phone.matches ? "--bg" : "--app-bg").trim();
+      let metas = [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')];
+      if (!metas.length) {
+        const m = document.createElement("meta");
+        m.name = "theme-color";
+        document.head.appendChild(m);
+        metas = [m];
+      }
+      for (const m of metas) {
+        m.removeAttribute("media");
+        if (color) m.content = color;
+      }
+    };
     apply();
     dark.addEventListener("change", apply);
-    return () => dark.removeEventListener("change", apply);
+    phone.addEventListener("change", apply);
+    return () => {
+      dark.removeEventListener("change", apply);
+      phone.removeEventListener("change", apply);
+    };
   }, [theme]);
 }
 
